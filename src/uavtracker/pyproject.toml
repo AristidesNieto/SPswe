@@ -1,7 +1,7 @@
 [project]
 name = "uavtracker"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.0.2"
+description = "Simple UAV path planing tool GEN-AI made"
 readme = "README.md"
 authors = [
     { name = "Dejan Šeatović", email = "dejan.seatovic@ost.ch" }
@@ -9,6 +9,8 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "nicegui>=3.17.1",
+    "pyproj>=3.8.0",
+    "rasterio>=1.5.2",
     "shapely>=2.1.2",
 ]
 
