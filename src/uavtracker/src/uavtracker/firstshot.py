@@ -1,7 +1,7 @@
 from nicegui import ui
 import math
 
-# 1. Load MapLibre dependencies into the document head, explicitly marking them as shared
+# 1. Load MapLibre dependencies into the document head
 ui.add_head_html('''
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -14,13 +14,12 @@ ALTITUDE_M = 30
 RADIUS = 0.003
 state = {'angle': 0.0}
 
-# 2. Use a page route to properly manage the client lifecycle
 @ui.page('/')
 async def main_page():
     # Remove default padding
     ui.query('.nicegui-content').classes('p-0')
     
-    # Create the map container using native NiceGUI elements
+    # Create the map container
     ui.element('div').props('id=map').classes('w-screen h-screen absolute top-0 left-0 z-0')
     
     # Create the HUD
@@ -30,10 +29,10 @@ async def main_page():
         lat_label = ui.label(f'Lat: {CENTER_LAT:.5f}').classes('font-mono')
         alt_label = ui.label(f'Alt: {ALTITUDE_M} m (MSL)').classes('font-mono text-blue-600 font-bold')
 
-    # 3. CRITICAL: Wait for the browser to finish rendering the HTML
+    # Wait for the browser to finish rendering the HTML
     await ui.context.client.connected()
 
-    # 4. Now initialize MapLibre safely
+    # Initialize MapLibre with the shadow layer added
     ui.run_javascript(f'''
         window.map = new maplibregl.Map({{
             container: 'map',
@@ -54,11 +53,12 @@ async def main_page():
                 }}]
             }},
             center: [{CENTER_LNG}, {CENTER_LAT}],
-            zoom: 14.5,
+            zoom: 15, // Zoomed in slightly more to see the shadow effect better
             pitch: 55
         }});
 
         window.map.on('load', () => {{
+            // Single data source for the UAV
             window.map.addSource('uav', {{
                 'type': 'geojson',
                 'data': {{
@@ -67,6 +67,21 @@ async def main_page():
                 }}
             }});
 
+            // 1. ADD THE SHADOW FIRST (so it draws underneath)
+            window.map.addLayer({{
+                'id': 'uav-shadow',
+                'type': 'circle',
+                'source': 'uav',
+                'paint': {{
+                    'circle-radius': 8,
+                    'circle-color': '#000000',
+                    'circle-blur': 0.8, // Softens the edges
+                    'circle-opacity': 0.4, // Makes it semi-transparent
+                    'circle-translate': [0, 20] // Offsets the shadow 20 pixels DOWN on the screen
+                }}
+            }});
+
+            // 2. ADD THE UAV MARKER ON TOP
             window.map.addLayer({{
                 'id': 'uav-marker',
                 'type': 'circle',
@@ -80,6 +95,7 @@ async def main_page():
             }});
         }});
 
+        // Updating the source moves both the marker and the shadow instantly
         window.updateUAV = function(lng, lat) {{
             if (window.map && window.map.getSource('uav')) {{
                 window.map.getSource('uav').setData({{
@@ -90,7 +106,7 @@ async def main_page():
         }};
     ''')
 
-    # 5. Define the update loop tied to this specific client session
+    # Define the update loop
     def update_uav_position():
         state['angle'] += 0.05
         current_lng = CENTER_LNG + RADIUS * math.cos(state['angle'])
