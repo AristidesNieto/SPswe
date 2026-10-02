@@ -1,12 +1,12 @@
 from nicegui import ui
 import math
 
-# 1. Load MapLibre dependencies into the document head
+# 1. Load MapLibre dependencies into the document head, explicitly marking them as shared
 ui.add_head_html('''
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <style>body { margin: 0; padding: 0; overflow: hidden; }</style>
-''')
+''', shared=True)
 
 # Constants
 CENTER_LNG, CENTER_LAT = 8.9056, 47.4795
