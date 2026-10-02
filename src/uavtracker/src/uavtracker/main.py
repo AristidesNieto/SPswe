@@ -21,7 +21,6 @@ app.add_static_files('/static', current_dir)
 CENTER_LNG, CENTER_LAT = 8.9056, 47.4795
 SPEED = 0.00008  
 
-# STATE UPDATE: route and boundary now store dicts: {'coords': [lng,lat,alt], 'action': '...'}
 state = {
     'lng': CENTER_LNG, 
     'lat': CENTER_LAT, 
@@ -35,8 +34,10 @@ state = {
     'pattern': 'Lawnmower',
     'spacing_m': 30,
     'agl_m': 30,       
-    'dsm_path': None,
-    'current_action': 'None' # NEW: The action applied to the next clicked point
+    'current_action': 'None',
+    'dsms': [],
+    'dtms': [],
+    'orthos': []
 }
 
 ui.add_head_html(f'''
@@ -56,64 +57,122 @@ async def main_page():
     ui.element('div').props('id=map').classes('w-screen h-screen absolute top-0 left-0 z-0')
     
     # ==========================================
-    # DIALOGS (Hidden until toolbar icons clicked)
+    # DIALOGS
     # ==========================================
     
+    # 0. Help / Instructions Dialog
+    with ui.dialog() as dlg_help, ui.card().classes('w-96 max-h-[80vh] overflow-y-auto'):
+        ui.label('Mission Planner Guide').classes('text-xl font-bold text-blue-800')
+        ui.markdown("""
+        **Navigation**
+        * **Pan:** Click and drag the map.
+        * **Zoom:** Scroll wheel.
+        * **3D View (Pitch & Rotate):** Hold Right-Click and drag, or use the compass widget in the bottom right.
+
+        **1. Define Flight Parameters**
+        Click the **Airplane icon** to set your line spacing (distance between tracks) and target AGL (Above Ground Level) height.
+
+        **2. Draw Area & Add Actions**
+        Click the **Pencil icon**. Choose an action (e.g., *Take Photo*), then click the map to drop points. A yellow boundary will form. To draw waypoints directly instead of a boundary, select "Waypoints".
+
+        **3. Generate Coverage Path**
+        Once your boundary has at least 3 points, open the Pencil menu, select a pattern (Lawnmower or Grid), and click **Compute Path**. The 3D path will automatically trace the ground elevation.
+
+        **4. Upload Geospatial Data**
+        Click the **Upload icon** to load GeoTIFFs. You can upload multiple files at once. 
+        * **DSMs** (Surface) are prioritized for obstacle clearance.
+        * **DTMs** (Terrain) are used if no DSM covers the area. 
+
+        **5. Simulation & Export**
+        Use the **Play/Stop** icons to simulate the RTK flight. Click the **Download icon** to export your mission directly to GeoJSON, KML, or KMZ for your Ground Control Station.
+        """)
+        ui.button('Close', on_click=dlg_help.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
+
     # 1. Flight Parameters Dialog
     with ui.dialog() as dlg_flight, ui.card().classes('w-80'):
-        ui.label('1. Flight Parameters').classes('text-lg font-bold')
+        ui.label('Flight Parameters').classes('text-lg font-bold')
         ui.number('Distance between lines (m)', value=30, min=2, max=500).bind_value_to(state, 'spacing_m').classes('w-full')
         ui.number('Target AGL Height (m)', value=30, min=5, max=500).bind_value_to(state, 'agl_m').classes('w-full')
         ui.button('Close', on_click=dlg_flight.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
     # 2. Area & Path Computation Dialog
     with ui.dialog() as dlg_area, ui.card().classes('w-80'):
-        ui.label('2. Area & Path').classes('text-lg font-bold')
+        ui.label('Area & Path').classes('text-lg font-bold')
         ui.radio(['Boundary', 'Waypoints'], value='Boundary').bind_value_to(state, 'click_mode').classes('flex flex-row gap-4')
         ui.select(['None', 'Take Photo', 'Start Video', 'Stop Video', 'Hover 5s'], value='None', label='Action for next point') \
             .bind_value_to(state, 'current_action').classes('w-full mt-2')
         ui.select(['Lawnmower', 'Grid'], value='Lawnmower', label='Coverage Pattern').bind_value_to(state, 'pattern').classes('w-full mt-2')
-        ui.button('Compute Path', on_click=lambda: generate_coverage_path()).classes('bg-blue-600 text-white w-full mt-2')
+        ui.button('Compute Path', on_click=lambda: generate_coverage_path()).classes('bg-blue-600 text-white w-full mt-4')
         ui.button('Clear Map', on_click=lambda: clear_all()).classes('bg-red-600 text-white w-full mt-2')
         ui.button('Close', on_click=dlg_area.close).classes('w-full mt-2 bg-gray-200 text-gray-800')
 
     # 3. Upload Data Dialog
     with ui.dialog() as dlg_upload, ui.card().classes('w-80'):
-        ui.label('3. Upload DSM (GeoTIFF)').classes('text-lg font-bold')
-        def handle_upload(e):
+        ui.label('Upload Geospatial Data').classes('text-lg font-bold')
+        ui.label('Supports multiple files per upload.').classes('text-xs text-gray-500 mb-2')
+        
+        upload_type = ui.select(['DSM', 'DTM', 'Orthomosaic'], value='DSM', label='Select Data Category').classes('w-full mt-2')
+        
+        async def handle_upload(e):
             if not HAS_GEO:
                 ui.notify('Please install rasterio, pyproj, simplekml', type='negative')
                 return
-            path = os.path.join(current_dir, e.name)
+            
+            # Safely get the filename
+            file_name = getattr(e, 'name', getattr(e, 'filename', 'uploaded_file.tif'))
+            path = os.path.join(current_dir, file_name)
+            
+            # Safely get the file object
+            file_source = getattr(e, 'content', getattr(e, 'file', None))
+            if file_source is None:
+                ui.notify('Error: Could not read file source.', type='negative')
+                return
+                
+            # Execute the read command
+            raw_data = file_source.read()
+            
+            # ULTIMATE FIX: Native Python check for any kind of async promise/coroutine
+            if hasattr(raw_data, '__await__'):
+                data = await raw_data
+            else:
+                data = raw_data
+            
+            # Write the resolved bytes to disk
             with open(path, 'wb') as f:
-                f.write(e.content.read())
-            state['dsm_path'] = path
-            ui.notify(f'Loaded DSM: {e.name}', type='positive')
-            dlg_upload.close()
-        ui.upload(on_upload=handle_upload).classes('w-full mt-2')
+                f.write(data)
+                
+            cat = upload_type.value
+            if cat == 'DSM': state['dsms'].append(path)
+            elif cat == 'DTM': state['dtms'].append(path)
+            elif cat == 'Orthomosaic': state['orthos'].append(path)
+            
+            ui.notify(f'Loaded {cat}: {file_name}', type='positive')
+
+        ui.upload(multiple=True, on_upload=handle_upload).classes('w-full mt-2')
         ui.button('Close', on_click=dlg_upload.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
     # 4. Download Export Dialog
     with ui.dialog() as dlg_export, ui.card().classes('w-80'):
-        ui.label('4. Export Mission').classes('text-lg font-bold')
-        ui.label('Exports boundary, paths, and waypoint actions.').classes('text-xs text-gray-500 mb-2')
+        ui.label('Export Mission').classes('text-lg font-bold')
         ui.button('Download GeoJSON', on_click=lambda: export_geojson()).classes('w-full mt-2 bg-gray-800 text-white')
         ui.button('Download KML', on_click=lambda: export_kml(kmz=False)).classes('w-full mt-2 bg-gray-800 text-white')
         ui.button('Download KMZ', on_click=lambda: export_kml(kmz=True)).classes('w-full mt-2 bg-gray-800 text-white')
         ui.button('Close', on_click=dlg_export.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
     # ==========================================
-    # FLOATING TOP TOOLBAR (Clean GUI)
+    # FLOATING TOP TOOLBAR
     # ==========================================
     with ui.row().classes('absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 rounded-full px-2 py-1 gap-2 items-center'):
         with ui.button(icon='flight_takeoff', on_click=dlg_flight.open).props('flat round'):
-            ui.tooltip('1. Flight Parameters')
+            ui.tooltip('Flight Parameters')
         with ui.button(icon='polyline', on_click=dlg_area.open).props('flat round'):
-            ui.tooltip('2. Area Definition & Path')
+            ui.tooltip('Area Definition & Path')
         with ui.button(icon='upload_file', on_click=dlg_upload.open).props('flat round'):
-            ui.tooltip('3. Upload DSM')
+            ui.tooltip('Upload DSM/DTM/Ortho')
         with ui.button(icon='download', on_click=dlg_export.open).props('flat round'):
-            ui.tooltip('4. Export Mission Data')
+            ui.tooltip('Export Mission Data')
+        with ui.button(icon='help_outline', on_click=dlg_help.open).props('flat round text-blue'):
+            ui.tooltip('Help & Instructions')
         
         ui.separator().props('vertical').classes('mx-2')
         
@@ -136,20 +195,18 @@ async def main_page():
     ui.run_javascript('if (typeof window.initMap === "function") window.initMap();')
 
     # ==========================================
-    # EXPORT LOGIC (GeoJSON, KML, KMZ)
+    # EXPORT LOGIC
     # ==========================================
     def export_geojson():
         data = {"type": "FeatureCollection", "features": []}
-        
         if state['boundary'] and len(state['boundary']) >= 3:
             coords = [pt['coords'] for pt in state['boundary']]
-            coords.append(coords[0]) # Close loop
+            coords.append(coords[0])
             data['features'].append({
                 "type": "Feature",
                 "properties": {"name": "Area Boundary", "actions": [pt['action'] for pt in state['boundary']]},
                 "geometry": {"type": "Polygon", "coordinates": [coords]}
             })
-            
         if state['route']:
             coords = [pt['coords'] for pt in state['route']]
             data['features'].append({
@@ -163,53 +220,43 @@ async def main_page():
                     "properties": {"name": f"WP {idx+1}", "action": pt['action']},
                     "geometry": {"type": "Point", "coordinates": pt['coords']}
                 })
-                
         path = os.path.join(current_dir, 'mission.geojson')
         with open(path, 'w') as f:
             json.dump(data, f)
         ui.download(path)
-        dlg_export.close()
 
     def export_kml(kmz=False):
         if not HAS_GEO:
             ui.notify('simplekml library required', type='negative')
             return
-            
         kml = simplekml.Kml()
         if state['boundary'] and len(state['boundary']) >= 3:
             coords = [(pt['coords'][0], pt['coords'][1]) for pt in state['boundary']]
             coords.append(coords[0])
             pol = kml.newpolygon(name="Area Boundary", outerboundaryis=coords)
-            pol.style.polystyle.color = '4000ffff' # Transparent Yellow
+            pol.style.polystyle.color = '4000ffff'
             pol.style.linestyle.color = 'ff00ffff' 
-            
             for idx, pt in enumerate(state['boundary']):
                 p = kml.newpoint(name=f"BND {idx+1}", coords=[(pt['coords'][0], pt['coords'][1])])
                 p.description = f"Action: {pt['action']}"
-                
         if state['route']:
             coords = [(pt['coords'][0], pt['coords'][1], pt['coords'][2] if len(pt['coords'])>2 else 0) for pt in state['route']]
             ls = kml.newlinestring(name="Flight Path", coords=coords)
             ls.altitudemode = simplekml.AltitudeMode.absolute
-            ls.style.linestyle.color = 'ffff0000' # Blue
+            ls.style.linestyle.color = 'ffff0000'
             ls.style.linestyle.width = 3
-            
             for idx, pt in enumerate(state['route']):
                 p = kml.newpoint(name=f"WP {idx+1}", coords=[coords[idx]])
                 p.description = f"Action: {pt['action']}"
                 p.altitudemode = simplekml.AltitudeMode.absolute
-                
         filename = 'mission.kmz' if kmz else 'mission.kml'
         path = os.path.join(current_dir, filename)
-        if kmz:
-            kml.savekmz(path)
-        else:
-            kml.save(path)
+        if kmz: kml.savekmz(path)
+        else: kml.save(path)
         ui.download(path)
-        dlg_export.close()
 
     # ==========================================
-    # FLIGHT & MAPPING LOGIC
+    # FLIGHT & ELEVATION LOGIC
     # ==========================================
     def clear_all():
         state['route'].clear()
@@ -220,16 +267,33 @@ async def main_page():
         update_boundary_display()
         dlg_area.close()
 
-    def get_elevation(lng, lat):
-        if state['dsm_path'] and HAS_GEO:
-            try:
-                with rasterio.open(state['dsm_path']) as src:
-                    transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
-                    x, y = transformer.transform(lng, lat)
-                    for val in src.sample([(x, y)]):
-                        return float(val[0])
-            except Exception:
-                pass
+    def get_elevation(lng, lat, open_rasters=None):
+        """Fetches elevation. Uses pre-opened rasters for bulk speed, or opens them for single clicks."""
+        if open_rasters is not None:
+            # FAST PATH for bulk generation
+            for src, transformer in open_rasters:
+                x, y = transformer.transform(lng, lat)
+                if src.bounds.left <= x <= src.bounds.right and src.bounds.bottom <= y <= src.bounds.top:
+                    try:
+                        for val in src.sample([(x, y)]):
+                            return float(val[0])
+                    except Exception:
+                        pass
+        elif HAS_GEO:
+            # SLOW PATH for single manual clicks
+            for file_list in [state['dsms'], state['dtms']]:
+                for path in file_list:
+                    try:
+                        with rasterio.open(path) as src:
+                            transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
+                            x, y = transformer.transform(lng, lat)
+                            if src.bounds.left <= x <= src.bounds.right and src.bounds.bottom <= y <= src.bounds.top:
+                                for val in src.sample([(x, y)]):
+                                    return float(val[0])
+                    except Exception:
+                        continue
+                        
+        # Fallback simulated terrain
         dist = math.sqrt((lng - CENTER_LNG)**2 + (lat - CENTER_LAT)**2)
         return 530.0 + (100.0 * math.exp(-(dist**2) / 0.00005))
 
@@ -276,6 +340,17 @@ async def main_page():
         if state['pattern'] == 'Grid':
             append_sweeps(is_vertical=True)
             
+        # 1. OPTIMIZATION: Pre-open all rasters so we don't crash the OS file limits
+        open_rasters = []
+        if HAS_GEO:
+            for path in state['dsms'] + state['dtms']:
+                try:
+                    src = rasterio.open(path)
+                    transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
+                    open_rasters.append((src, transformer))
+                except Exception:
+                    pass
+
         new_route_3d = []
         sample_deg = 5.0 / 111111.0
 
@@ -289,12 +364,16 @@ async def main_page():
                 f = step / float(steps)
                 lx = p1[0] + f * (p2[0] - p1[0])
                 ly = p1[1] + f * (p2[1] - p1[1])
-                lz = get_elevation(lx, ly) + state['agl_m']
-                # Apply the current UI action to the auto-generated points
+                # Pass the pre-opened rasters to instantly get elevation
+                lz = get_elevation(lx, ly, open_rasters) + state['agl_m']
                 new_route_3d.append({'coords': [lx, ly, lz], 'action': state['current_action']})
                 
         final_pt = raw_waypoints_2d[-1]
-        new_route_3d.append({'coords': [final_pt[0], final_pt[1], get_elevation(final_pt[0], final_pt[1]) + state['agl_m']], 'action': state['current_action']})
+        new_route_3d.append({'coords': [final_pt[0], final_pt[1], get_elevation(final_pt[0], final_pt[1], open_rasters) + state['agl_m']], 'action': state['current_action']})
+        
+        # 2. OPTIMIZATION: Safely close all rasters to free up system memory
+        for src, _ in open_rasters:
+            src.close()
             
         state['route'] = new_route_3d
         state['target_idx'] = 0
@@ -338,7 +417,6 @@ async def main_page():
             if new_clicks:
                 for pt in new_clicks:
                     if state['click_mode'] == 'Boundary':
-                        # Save the point WITH its assigned action
                         state['boundary'].append({'coords': pt, 'action': state['current_action']})
                         update_boundary_display()
                     else:
