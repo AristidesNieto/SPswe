@@ -19,13 +19,35 @@ window.initMap = function() {
                     'tiles': ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
                     'tileSize': 256,
                     'attribution': '&copy; OpenStreetMap'
+                },
+                // NEW: FOSS Mapzen Terrarium tiles for 3D elevation
+                'terrainSource': {
+                    'type': 'raster-dem',
+                    'tiles': ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+                    'encoding': 'terrarium',
+                    'tileSize': 256,
+                    'maxzoom': 14
                 }
             },
-            'layers': [{ 'id': 'osm', 'type': 'raster', 'source': 'osm' }]
+            'layers': [{ 'id': 'osm', 'type': 'raster', 'source': 'osm' }],
+            // NEW: Enable 3D terrain rendering with slight height exaggeration
+            'terrain': { 'source': 'terrainSource', 'exaggeration': 1.5 }
         },
         center: [window.MAP_CONFIG.lng, window.MAP_CONFIG.lat],
-        zoom: 15, pitch: 55
+        zoom: 14.5, 
+        pitch: 65,     // Increased pitch to see the horizon and 3D shapes better
+        maxPitch: 85   // Allow the user to tilt the camera further down
     });
+
+    // NEW: Add a 3D navigation control to the bottom right
+    window.mapInstance.addControl(
+        new maplibregl.NavigationControl({
+            visualizePitch: true,
+            showZoom: true,
+            showCompass: true
+        }), 
+        'bottom-right'
+    );
 
     window.mapInstance.on('load', () => {
         // Change the cursor to a crosshair natively
@@ -37,16 +59,14 @@ window.initMap = function() {
             'data': { 'type': 'FeatureCollection', 'features': [] }
         });
 
-        // 1. Draw polygon fill
         window.mapInstance.addLayer({
             'id': 'boundary-fill',
             'type': 'fill',
             'source': 'boundary',
-            'filter': ['==', '$type', 'Polygon'], // Only applies to Polygon features
+            'filter': ['==', '$type', 'Polygon'], 
             'paint': { 'fill-color': '#facc15', 'fill-opacity': 0.3 }
         });
 
-        // 2. Draw border/connecting lines
         window.mapInstance.addLayer({
             'id': 'boundary-line',
             'type': 'line',
@@ -55,25 +75,22 @@ window.initMap = function() {
             'paint': { 'line-color': '#ca8a04', 'line-width': 2, 'line-dasharray': [2, 2] }
         });
 
-        // 3. Draw colored circles for the points
         window.mapInstance.addLayer({
             'id': 'boundary-points',
             'type': 'circle',
             'source': 'boundary',
-            'filter': ['==', '$type', 'Point'], // Only applies to Point features
+            'filter': ['==', '$type', 'Point'], 
             'paint': { 'circle-radius': 10, 'circle-color': '#facc15', 'circle-stroke-width': 2, 'circle-stroke-color': '#ca8a04' }
         });
 
-        // 4. Draw text numbers on the points
         window.mapInstance.addLayer({
             'id': 'boundary-labels',
             'type': 'symbol',
             'source': 'boundary',
             'filter': ['==', '$type', 'Point'],
             'layout': { 'text-field': ['get', 'label'], 'text-size': 12, 'text-allow-overlap': true },
-            'paint': { 'text-color': '#000000' } // Black text on yellow boundary points
+            'paint': { 'text-color': '#000000' } 
         });
-
 
         // --- Path Layers ---
         window.mapInstance.addSource('path', {
@@ -103,9 +120,8 @@ window.initMap = function() {
             'source': 'path',
             'filter': ['==', '$type', 'Point'],
             'layout': { 'text-field': ['get', 'label'], 'text-size': 12, 'text-allow-overlap': true },
-            'paint': { 'text-color': '#ffffff' } // White text on blue route points
+            'paint': { 'text-color': '#ffffff' } 
         });
-
 
         // --- UAV Layers ---
         window.mapInstance.addSource('uav', {
