@@ -125,6 +125,12 @@ async def main_page():
         with ui.button(icon='stop', on_click=lambda: state.update(running=False)).props('flat round text-red'): ui.tooltip('Stop UAV Simulation')
 
     # ==========================================
+    # TOP RIGHT LOGO PLACEHOLDER
+    # ==========================================
+    with ui.element('div').classes('absolute top-4 right-4 z-50 pointer-events-none bg-white/80 backdrop-blur p-2 rounded shadow-sm'):
+        ui.image('/static/ISF_Instituts_Visual_EN_Zeichenfläche 1.png').classes('w-56 h-auto')
+
+    # ==========================================
     # BOTTOM LEFT TELEMETRY HUD
     # ==========================================
     with ui.card().classes('absolute bottom-8 left-4 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 w-64'):
@@ -320,7 +326,7 @@ async def main_page():
             new_clicks = await ui.run_javascript(js_code)
             if new_clicks:
                 for pt in new_clicks:
-                    print(f"--> PYTHON RECEIVED CLICK: {pt}") # EXPOSED
+                    print(f"--> PYTHON RECEIVED CLICK: {pt}") 
                     if state['click_mode'] == 'Boundary':
                         state['boundary'].append({'coords': pt, 'action': state['current_action']})
                         update_boundary_display()
@@ -329,7 +335,7 @@ async def main_page():
                         state['route'].append({'coords': pt_3d, 'action': state['current_action']})
                         update_path_display()
         except Exception as e:
-            print(f"--> PYTHON SILENT ERROR CAUGHT: {e}") # THIS PREVENTS HIDDEN CRASHES
+            print(f"--> PYTHON SILENT ERROR CAUGHT: {e}") 
 
     def flight_controller():
         if not state['running'] or not state['route']: return
