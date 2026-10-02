@@ -20,10 +20,10 @@ state = {
     'direction': 1,
     'running': False,
     'click_mode': 'Boundary', 
-    'pattern': 'Lawnmower'
+    'pattern': 'Lawnmower',
+    'spacing_m': 30  # NEW: Default line spacing in meters
 }
 
-# Added CSS override to force crosshair cursor even over interactive map elements
 ui.add_head_html(f'''
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -54,11 +54,16 @@ async def main_page():
         wp_label = ui.label('Waypoints: 0').classes('font-mono text-blue-600 font-bold mb-2')
         
         ui.label('Auto-Coverage Path:').classes('text-xs text-gray-500 mt-2')
-        with ui.row().classes('w-full gap-2'):
+        
+        # NEW: Added spacing input and reorganized the generation layout
+        with ui.row().classes('w-full gap-2 items-center'):
+            ui.number('Spacing (m)', value=30, min=2, max=500) \
+                .bind_value_to(state, 'spacing_m').classes('w-24')
             ui.select(['Lawnmower', 'Grid'], value='Lawnmower') \
                 .bind_value_to(state, 'pattern').classes('flex-1')
-            ui.button('Generate', on_click=lambda: generate_coverage_path()) \
-                .classes('bg-blue-600 text-white')
+                
+        ui.button('Generate Path', on_click=lambda: generate_coverage_path()) \
+            .classes('bg-blue-600 text-white w-full mt-2')
 
         with ui.row().classes('w-full justify-between mt-4'):
             ui.button('Start', on_click=lambda: state.update(running=True)).classes('bg-green-600 text-white p-2 flex-1')
@@ -84,7 +89,13 @@ async def main_page():
             
         poly = Polygon(state['boundary'])
         minx, miny, maxx, maxy = poly.bounds
-        spacing = 0.0003  
+        
+        # NEW: Convert the requested meters into geographic degrees.
+        # 1 degree of latitude is ~111,111 meters everywhere.
+        spacing_deg_y = state['spacing_m'] / 111111.0
+        # 1 degree of longitude shrinks as you move away from the equator.
+        spacing_deg_x = state['spacing_m'] / (111111.0 * math.cos(math.radians(CENTER_LAT)))
+        
         new_route = []
 
         def get_sweeps(is_vertical=False):
@@ -93,12 +104,12 @@ async def main_page():
                 y = miny
                 while y <= maxy:
                     sweeps.append(LineString([(minx - 0.01, y), (maxx + 0.01, y)]))
-                    y += spacing
+                    y += spacing_deg_y  # Use precise Y spacing
             else:
                 x = minx
                 while x <= maxx:
                     sweeps.append(LineString([(x, miny - 0.01), (x, maxy + 0.01)]))
-                    x += spacing
+                    x += spacing_deg_x  # Use precise X spacing
             
             waypoints = []
             left_to_right = True
@@ -130,14 +141,12 @@ async def main_page():
     def update_boundary_display():
         features = []
         if state['boundary']:
-            # 1. Draw the connecting lines or filled polygon
             if len(state['boundary']) >= 3:
                 coords = state['boundary'] + [state['boundary'][0]]
                 features.append({'type': 'Feature', 'geometry': {'type': 'Polygon', 'coordinates': [coords]}})
             elif len(state['boundary']) == 2:
                 features.append({'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': state['boundary']}})
             
-            # 2. Draw the numbered points
             for i, pt in enumerate(state['boundary']):
                 features.append({
                     'type': 'Feature',
@@ -150,10 +159,8 @@ async def main_page():
 
     def update_path_display():
         wp_label.set_text(f"Waypoints: {len(state['route'])}")
-        
         features = []
         if state['route']:
-            # 1. Draw the flight path line
             coords = [[state['lng'], state['lat']]]
             if state['direction'] == 1:
                 coords.extend(state['route'][state['target_idx']:])
@@ -161,7 +168,6 @@ async def main_page():
                 coords.extend(state['route'][:state['target_idx']+1][::-1])
             features.append({'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': coords}})
             
-            # 2. Draw the numbered points
             for i, pt in enumerate(state['route']):
                 features.append({
                     'type': 'Feature',
@@ -219,7 +225,6 @@ async def main_page():
         lat_label.set_text(f"Lat: {state['lat']:.5f}")
         ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']});")
 
-    # SPEEDED UP POLLING: Now checks for clicks 10 times a second instead of 5
     ui.timer(0.1, poll_waypoints)
     ui.timer(0.1, flight_controller)
 
