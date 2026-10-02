@@ -12,7 +12,8 @@ ui.add_head_html('''
 CENTER_LNG, CENTER_LAT = 8.9056, 47.4795
 ALTITUDE_M = 30
 RADIUS = 0.003
-state = {'angle': 0.0}
+# Added 'running' flag to control the simulation
+state = {'angle': 0.0, 'running': True}
 
 @ui.page('/')
 async def main_page():
@@ -28,11 +29,19 @@ async def main_page():
         lng_label = ui.label(f'Lon: {CENTER_LNG:.5f}').classes('font-mono')
         lat_label = ui.label(f'Lat: {CENTER_LAT:.5f}').classes('font-mono')
         alt_label = ui.label(f'Alt: {ALTITUDE_M} m (MSL)').classes('font-mono text-blue-600 font-bold')
+        
+        # Add Start/Stop Buttons in a row
+        with ui.row().classes('mt-2 w-full justify-between'):
+            ui.button('Start', on_click=lambda: state.update(running=True)) \
+                .classes('bg-green-600 hover:bg-green-700 text-white flex-1')
+            
+            ui.button('Stop', on_click=lambda: state.update(running=False)) \
+                .classes('bg-red-600 hover:bg-red-700 text-white flex-1')
 
     # Wait for the browser to finish rendering the HTML
     await ui.context.client.connected()
 
-    # Initialize MapLibre with the shadow layer added
+    # Initialize MapLibre
     ui.run_javascript(f'''
         window.map = new maplibregl.Map({{
             container: 'map',
@@ -53,12 +62,11 @@ async def main_page():
                 }}]
             }},
             center: [{CENTER_LNG}, {CENTER_LAT}],
-            zoom: 15, // Zoomed in slightly more to see the shadow effect better
+            zoom: 15,
             pitch: 55
         }});
 
         window.map.on('load', () => {{
-            // Single data source for the UAV
             window.map.addSource('uav', {{
                 'type': 'geojson',
                 'data': {{
@@ -67,7 +75,6 @@ async def main_page():
                 }}
             }});
 
-            // 1. ADD THE SHADOW FIRST (so it draws underneath)
             window.map.addLayer({{
                 'id': 'uav-shadow',
                 'type': 'circle',
@@ -75,13 +82,12 @@ async def main_page():
                 'paint': {{
                     'circle-radius': 8,
                     'circle-color': '#000000',
-                    'circle-blur': 0.8, // Softens the edges
-                    'circle-opacity': 0.4, // Makes it semi-transparent
-                    'circle-translate': [0, 20] // Offsets the shadow 20 pixels DOWN on the screen
+                    'circle-blur': 0.8,
+                    'circle-opacity': 0.4,
+                    'circle-translate': [0, 20]
                 }}
             }});
 
-            // 2. ADD THE UAV MARKER ON TOP
             window.map.addLayer({{
                 'id': 'uav-marker',
                 'type': 'circle',
@@ -95,7 +101,6 @@ async def main_page():
             }});
         }});
 
-        // Updating the source moves both the marker and the shadow instantly
         window.updateUAV = function(lng, lat) {{
             if (window.map && window.map.getSource('uav')) {{
                 window.map.getSource('uav').setData({{
@@ -108,6 +113,10 @@ async def main_page():
 
     # Define the update loop
     def update_uav_position():
+        # Skip updates if stopped
+        if not state['running']:
+            return
+            
         state['angle'] += 0.05
         current_lng = CENTER_LNG + RADIUS * math.cos(state['angle'])
         current_lat = CENTER_LAT + RADIUS * math.sin(state['angle'])
