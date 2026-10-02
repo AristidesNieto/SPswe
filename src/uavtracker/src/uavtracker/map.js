@@ -1,4 +1,4 @@
-console.log("[map.js] File loaded successfully!");
+console.log("[map.js] File loaded successfully! Waiting for clicks...");
 window.waypointQueue = [];
 
 window.initMap = function() {
@@ -6,13 +6,13 @@ window.initMap = function() {
         setTimeout(window.initMap, 50);
         return;
     }
-
     if (window.mapInstance) return;
 
     window.mapInstance = new maplibregl.Map({
         container: 'map',
         style: {
             'version': 8,
+            'glyphs': 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf', 
             'sources': {
                 'osm': {
                     'type': 'raster',
@@ -32,35 +32,30 @@ window.initMap = function() {
             'terrain': { 'source': 'terrainSource', 'exaggeration': 1.5 }
         },
         center: [window.MAP_CONFIG.lng, window.MAP_CONFIG.lat],
-        zoom: 14.5, 
-        pitch: 65,     
-        maxPitch: 85   
+        zoom: 14.5, pitch: 65, maxPitch: 85   
     });
 
-    window.mapInstance.addControl(
-        new maplibregl.NavigationControl({ visualizePitch: true, showZoom: true, showCompass: true }), 
-        'bottom-right'
-    );
+    window.mapInstance.addControl(new maplibregl.NavigationControl({ visualizePitch: true, showZoom: true, showCompass: true }), 'bottom-right');
 
     window.mapInstance.on('load', () => {
         window.mapInstance.getCanvas().style.cursor = 'crosshair';
 
-        // --- Boundary Layers ---
+        // --- Boundary Layers (Filters removed to ensure points ALWAYS draw) ---
         window.mapInstance.addSource('boundary', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
-        window.mapInstance.addLayer({ 'id': 'boundary-fill', 'type': 'fill', 'source': 'boundary', 'filter': ['==', '$type', 'Polygon'], 'paint': { 'fill-color': '#facc15', 'fill-opacity': 0.3 } });
-        window.mapInstance.addLayer({ 'id': 'boundary-line', 'type': 'line', 'source': 'boundary', 'filter': ['in', '$type', 'Polygon', 'LineString'], 'paint': { 'line-color': '#ca8a04', 'line-width': 2, 'line-dasharray': [2, 2] } });
-        window.mapInstance.addLayer({ 'id': 'boundary-points', 'type': 'circle', 'source': 'boundary', 'filter': ['==', '$type', 'Point'], 'paint': { 'circle-radius': 10, 'circle-color': '#facc15', 'circle-stroke-width': 2, 'circle-stroke-color': '#ca8a04' } });
-        window.mapInstance.addLayer({ 'id': 'boundary-labels', 'type': 'symbol', 'source': 'boundary', 'filter': ['==', '$type', 'Point'], 'layout': { 'text-field': ['get', 'label'], 'text-size': 12, 'text-allow-overlap': true }, 'paint': { 'text-color': '#000000' } });
+        window.mapInstance.addLayer({ 'id': 'boundary-fill', 'type': 'fill', 'source': 'boundary', 'paint': { 'fill-color': '#facc15', 'fill-opacity': 0.3 } });
+        window.mapInstance.addLayer({ 'id': 'boundary-line', 'type': 'line', 'source': 'boundary', 'paint': { 'line-color': '#ca8a04', 'line-width': 2, 'line-dasharray': [2, 2] } });
+        window.mapInstance.addLayer({ 'id': 'boundary-points', 'type': 'circle', 'source': 'boundary', 'paint': { 'circle-radius': 10, 'circle-color': '#facc15', 'circle-stroke-width': 2, 'circle-stroke-color': '#ca8a04' } });
+        
+        // I have temporarily disabled the text-labels layer completely to guarantee it is not causing a silent MapLibre crash.
 
         // --- Path Layers (Ground Track) ---
         window.mapInstance.addSource('path', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
-        window.mapInstance.addLayer({ 'id': 'path-line', 'type': 'line', 'source': 'path', 'filter': ['==', '$type', 'LineString'], 'paint': { 'line-color': '#3b82f6', 'line-width': 3 } });
+        window.mapInstance.addLayer({ 'id': 'path-line', 'type': 'line', 'source': 'path', 'paint': { 'line-color': '#3b82f6', 'line-width': 3 } });
 
-        // --- UAV Shadow (Draped on ground) ---
+        // --- UAV Shadow & Marker ---
         window.mapInstance.addSource('uav-shadow', { 'type': 'geojson', 'data': { 'type': 'Point', 'coordinates': [window.MAP_CONFIG.lng, window.MAP_CONFIG.lat] } });
         window.mapInstance.addLayer({ 'id': 'uav-shadow-layer', 'type': 'circle', 'source': 'uav-shadow', 'paint': { 'circle-radius': 8, 'circle-color': '#000', 'circle-blur': 0.8, 'circle-opacity': 0.5 } });
 
-        // --- UAV True 3D Marker (Floating Extrusion) ---
         window.mapInstance.addSource('uav-marker', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
         window.mapInstance.addLayer({
             'id': 'uav-marker-layer',
@@ -68,8 +63,8 @@ window.initMap = function() {
             'source': 'uav-marker',
             'paint': {
                 'fill-extrusion-color': '#ef4444',
-                'fill-extrusion-height': ['get', 'height'], // Top of the drone box
-                'fill-extrusion-base': ['get', 'base'],     // Bottom of the drone box
+                'fill-extrusion-height': ['get', 'height'], 
+                'fill-extrusion-base': ['get', 'base'],     
                 'fill-extrusion-opacity': 1.0
             }
         });
@@ -78,35 +73,28 @@ window.initMap = function() {
     });
 
     window.mapInstance.on('click', (e) => {
+        console.log("--> MAP CLICKED:", e.lngLat.lng, e.lngLat.lat); // DEBUG LOG
         window.waypointQueue.push([e.lngLat.lng, e.lngLat.lat]);
     });
 };
 
-// NEW: Accepts AGL from Python to float the cube correctly
 window.updateUAV = function(lng, lat, alt_msl, agl) {
+    if (!agl) agl = 30; 
     if (window.mapInstance) {
-        if (window.mapInstance.getSource('uav-shadow')) {
-            window.mapInstance.getSource('uav-shadow').setData({ 'type': 'Point', 'coordinates': [lng, lat] });
-        }
+        if (window.mapInstance.getSource('uav-shadow')) window.mapInstance.getSource('uav-shadow').setData({ 'type': 'Point', 'coordinates': [lng, lat] });
         if (window.mapInstance.getSource('uav-marker')) {
-            // Draw a tiny 4x4 meter box around the coordinate
-            const size = 0.00002; 
+            const radiusDegLat = 3.0 / 111111.0;
+            const radiusDegLng = 3.0 / (111111.0 * Math.cos(lat * Math.PI / 180));
+            const circleCoords = [];
+            for (let i = 0; i < 32; i++) {
+                const theta = (i / 32) * (2 * Math.PI);
+                circleCoords.push([lng + (radiusDegLng * Math.cos(theta)), lat + (radiusDegLat * Math.sin(theta))]);
+            }
+            circleCoords.push(circleCoords[0]); 
             window.mapInstance.getSource('uav-marker').setData({
                 'type': 'Feature',
-                'properties': {
-                    'base': agl - 1,   // Extrude starting 1 meter below AGL
-                    'height': agl + 1  // Extrude ending 1 meter above AGL (creates a 2m tall floating red block)
-                },
-                'geometry': {
-                    'type': 'Polygon',
-                    'coordinates': [[
-                        [lng - size, lat - size],
-                        [lng + size, lat - size],
-                        [lng + size, lat + size],
-                        [lng - size, lat + size],
-                        [lng - size, lat - size]
-                    ]]
-                }
+                'properties': { 'base': agl - 0.5, 'height': agl + 0.5 },
+                'geometry': { 'type': 'Polygon', 'coordinates': [circleCoords] }
             });
         }
     }
@@ -119,6 +107,7 @@ window.updatePath = function(geojson) {
 };
 
 window.updateBoundary = function(geojson) {
+    console.log("--> RECEIVED BOUNDARY UPDATE FROM PYTHON:", geojson); // DEBUG LOG
     if (window.mapInstance && window.mapInstance.getSource('boundary')) {
         window.mapInstance.getSource('boundary').setData(geojson);
     }
