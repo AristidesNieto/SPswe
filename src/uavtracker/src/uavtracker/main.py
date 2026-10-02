@@ -30,6 +30,7 @@ state = {
     'target_idx': 0,
     'direction': 1,
     'running': False,
+    'speed_mult': 1.0, # NEW: Base speed multiplier
     'click_mode': 'Boundary', 
     'pattern': 'Lawnmower',
     'spacing_m': 30,
@@ -40,6 +41,7 @@ state = {
     'orthos': []
 }
 
+# Added window.MAP_CONFIG.alt so the initial map load sets the drone at the correct height
 ui.add_head_html(f'''
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -47,7 +49,7 @@ ui.add_head_html(f'''
         body {{ margin: 0; padding: 0; overflow: hidden; }}
         .maplibregl-canvas {{ cursor: crosshair !important; }}
     </style>
-    <script>window.MAP_CONFIG = {{ lng: {CENTER_LNG}, lat: {CENTER_LAT} }};</script>
+    <script>window.MAP_CONFIG = {{ lng: {CENTER_LNG}, lat: {CENTER_LAT}, alt: {state['alt_msl']} }};</script>
     <script src="/static/map.js?t={time.time()}" defer></script>
 ''', shared=True)
 
@@ -59,8 +61,6 @@ async def main_page():
     # ==========================================
     # DIALOGS
     # ==========================================
-    
-    # 0. Help / Instructions Dialog
     with ui.dialog() as dlg_help, ui.card().classes('w-96 max-h-[80vh] overflow-y-auto'):
         ui.label('Mission Planner Guide').classes('text-xl font-bold text-blue-800')
         ui.markdown("""
@@ -88,14 +88,12 @@ async def main_page():
         """)
         ui.button('Close', on_click=dlg_help.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
-    # 1. Flight Parameters Dialog
     with ui.dialog() as dlg_flight, ui.card().classes('w-80'):
         ui.label('Flight Parameters').classes('text-lg font-bold')
         ui.number('Distance between lines (m)', value=30, min=2, max=500).bind_value_to(state, 'spacing_m').classes('w-full')
         ui.number('Target AGL Height (m)', value=30, min=5, max=500).bind_value_to(state, 'agl_m').classes('w-full')
         ui.button('Close', on_click=dlg_flight.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
-    # 2. Area & Path Computation Dialog
     with ui.dialog() as dlg_area, ui.card().classes('w-80'):
         ui.label('Area & Path').classes('text-lg font-bold')
         ui.radio(['Boundary', 'Waypoints'], value='Boundary').bind_value_to(state, 'click_mode').classes('flex flex-row gap-4')
@@ -106,52 +104,35 @@ async def main_page():
         ui.button('Clear Map', on_click=lambda: clear_all()).classes('bg-red-600 text-white w-full mt-2')
         ui.button('Close', on_click=dlg_area.close).classes('w-full mt-2 bg-gray-200 text-gray-800')
 
-    # 3. Upload Data Dialog
     with ui.dialog() as dlg_upload, ui.card().classes('w-80'):
         ui.label('Upload Geospatial Data').classes('text-lg font-bold')
         ui.label('Supports multiple files per upload.').classes('text-xs text-gray-500 mb-2')
-        
         upload_type = ui.select(['DSM', 'DTM', 'Orthomosaic'], value='DSM', label='Select Data Category').classes('w-full mt-2')
         
         async def handle_upload(e):
             if not HAS_GEO:
                 ui.notify('Please install rasterio, pyproj, simplekml', type='negative')
                 return
-            
-            # Safely get the filename
             file_name = getattr(e, 'name', getattr(e, 'filename', 'uploaded_file.tif'))
             path = os.path.join(current_dir, file_name)
-            
-            # Safely get the file object
             file_source = getattr(e, 'content', getattr(e, 'file', None))
             if file_source is None:
                 ui.notify('Error: Could not read file source.', type='negative')
                 return
-                
-            # Execute the read command
             raw_data = file_source.read()
+            if hasattr(raw_data, '__await__'): data = await raw_data
+            else: data = raw_data
             
-            # ULTIMATE FIX: Native Python check for any kind of async promise/coroutine
-            if hasattr(raw_data, '__await__'):
-                data = await raw_data
-            else:
-                data = raw_data
-            
-            # Write the resolved bytes to disk
-            with open(path, 'wb') as f:
-                f.write(data)
-                
+            with open(path, 'wb') as f: f.write(data)
             cat = upload_type.value
             if cat == 'DSM': state['dsms'].append(path)
             elif cat == 'DTM': state['dtms'].append(path)
             elif cat == 'Orthomosaic': state['orthos'].append(path)
-            
             ui.notify(f'Loaded {cat}: {file_name}', type='positive')
 
         ui.upload(multiple=True, on_upload=handle_upload).classes('w-full mt-2')
         ui.button('Close', on_click=dlg_upload.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
-    # 4. Download Export Dialog
     with ui.dialog() as dlg_export, ui.card().classes('w-80'):
         ui.label('Export Mission').classes('text-lg font-bold')
         ui.button('Download GeoJSON', on_click=lambda: export_geojson()).classes('w-full mt-2 bg-gray-800 text-white')
@@ -163,23 +144,16 @@ async def main_page():
     # FLOATING TOP TOOLBAR
     # ==========================================
     with ui.row().classes('absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 rounded-full px-2 py-1 gap-2 items-center'):
-        with ui.button(icon='flight_takeoff', on_click=dlg_flight.open).props('flat round'):
-            ui.tooltip('Flight Parameters')
-        with ui.button(icon='polyline', on_click=dlg_area.open).props('flat round'):
-            ui.tooltip('Area Definition & Path')
-        with ui.button(icon='upload_file', on_click=dlg_upload.open).props('flat round'):
-            ui.tooltip('Upload DSM/DTM/Ortho')
-        with ui.button(icon='download', on_click=dlg_export.open).props('flat round'):
-            ui.tooltip('Export Mission Data')
-        with ui.button(icon='help_outline', on_click=dlg_help.open).props('flat round text-blue'):
-            ui.tooltip('Help & Instructions')
+        with ui.button(icon='flight_takeoff', on_click=dlg_flight.open).props('flat round'): ui.tooltip('Flight Parameters')
+        with ui.button(icon='polyline', on_click=dlg_area.open).props('flat round'): ui.tooltip('Area Definition & Path')
+        with ui.button(icon='upload_file', on_click=dlg_upload.open).props('flat round'): ui.tooltip('Upload DSM/DTM/Ortho')
+        with ui.button(icon='download', on_click=dlg_export.open).props('flat round'): ui.tooltip('Export Mission Data')
+        with ui.button(icon='help_outline', on_click=dlg_help.open).props('flat round text-blue'): ui.tooltip('Help & Instructions')
         
         ui.separator().props('vertical').classes('mx-2')
         
-        with ui.button(icon='play_arrow', on_click=lambda: state.update(running=True)).props('flat round text-green'):
-            ui.tooltip('Start UAV Simulation')
-        with ui.button(icon='stop', on_click=lambda: state.update(running=False)).props('flat round text-red'):
-            ui.tooltip('Stop UAV Simulation')
+        with ui.button(icon='play_arrow', on_click=lambda: state.update(running=True)).props('flat round text-green'): ui.tooltip('Start UAV Simulation')
+        with ui.button(icon='stop', on_click=lambda: state.update(running=False)).props('flat round text-red'): ui.tooltip('Stop UAV Simulation')
 
     # ==========================================
     # BOTTOM LEFT TELEMETRY HUD
@@ -190,6 +164,15 @@ async def main_page():
         lat_label = ui.label(f"Lat: {state['lat']:.5f}").classes('font-mono text-xs')
         alt_msl_label = ui.label(f"MSL: {state['alt_msl']:.1f}m").classes('font-mono text-xs text-blue-700 font-bold')
         wp_label = ui.label('Waypoints: 0').classes('font-mono text-xs text-gray-600 font-bold mt-1')
+
+    # ==========================================
+    # RIGHT SIDE SPEED SLIDER
+    # ==========================================
+    with ui.card().classes('absolute top-1/2 right-4 -translate-y-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 flex flex-col items-center p-2 w-16'):
+        ui.label('SPEED').classes('text-[10px] font-bold text-gray-800 text-center')
+        # Setting props('reverse') makes vertical sliders go up instead of down
+        ui.slider(min=0.5, max=10.0, step=0.5, value=1.0).bind_value_to(state, 'speed_mult').props('vertical reverse').classes('h-40 my-2')
+        ui.label().bind_text_from(state, 'speed_mult', backward=lambda v: f"{v:.1f}x").classes('text-xs font-mono font-bold text-blue-600')
 
     await ui.context.client.connected()
     ui.run_javascript('if (typeof window.initMap === "function") window.initMap();')
@@ -221,8 +204,7 @@ async def main_page():
                     "geometry": {"type": "Point", "coordinates": pt['coords']}
                 })
         path = os.path.join(current_dir, 'mission.geojson')
-        with open(path, 'w') as f:
-            json.dump(data, f)
+        with open(path, 'w') as f: json.dump(data, f)
         ui.download(path)
 
     def export_kml(kmz=False):
@@ -265,22 +247,16 @@ async def main_page():
         state['running'] = False
         update_path_display()
         update_boundary_display()
-        dlg_area.close()
 
     def get_elevation(lng, lat, open_rasters=None):
-        """Fetches elevation. Uses pre-opened rasters for bulk speed, or opens them for single clicks."""
         if open_rasters is not None:
-            # FAST PATH for bulk generation
             for src, transformer in open_rasters:
                 x, y = transformer.transform(lng, lat)
                 if src.bounds.left <= x <= src.bounds.right and src.bounds.bottom <= y <= src.bounds.top:
                     try:
-                        for val in src.sample([(x, y)]):
-                            return float(val[0])
-                    except Exception:
-                        pass
+                        for val in src.sample([(x, y)]): return float(val[0])
+                    except Exception: pass
         elif HAS_GEO:
-            # SLOW PATH for single manual clicks
             for file_list in [state['dsms'], state['dtms']]:
                 for path in file_list:
                     try:
@@ -288,12 +264,8 @@ async def main_page():
                             transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
                             x, y = transformer.transform(lng, lat)
                             if src.bounds.left <= x <= src.bounds.right and src.bounds.bottom <= y <= src.bounds.top:
-                                for val in src.sample([(x, y)]):
-                                    return float(val[0])
-                    except Exception:
-                        continue
-                        
-        # Fallback simulated terrain
+                                for val in src.sample([(x, y)]): return float(val[0])
+                    except Exception: continue
         dist = math.sqrt((lng - CENTER_LNG)**2 + (lat - CENTER_LAT)**2)
         return 530.0 + (100.0 * math.exp(-(dist**2) / 0.00005))
 
@@ -327,8 +299,7 @@ async def main_page():
                 intersection = poly.intersection(line)
                 if intersection.is_empty: continue
                 coords = []
-                if intersection.geom_type == 'LineString':
-                    coords = list(intersection.coords)
+                if intersection.geom_type == 'LineString': coords = list(intersection.coords)
                 elif intersection.geom_type == 'MultiLineString':
                     ixmin, iymin, ixmax, iymax = intersection.bounds
                     coords = [(ixmin, iymin), (ixmax, iymax)] if not is_vertical else [(ixmin, iymin), (ixmin, iymax)]
@@ -340,7 +311,6 @@ async def main_page():
         if state['pattern'] == 'Grid':
             append_sweeps(is_vertical=True)
             
-        # 1. OPTIMIZATION: Pre-open all rasters so we don't crash the OS file limits
         open_rasters = []
         if HAS_GEO:
             for path in state['dsms'] + state['dtms']:
@@ -348,8 +318,7 @@ async def main_page():
                     src = rasterio.open(path)
                     transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
                     open_rasters.append((src, transformer))
-                except Exception:
-                    pass
+                except Exception: pass
 
         new_route_3d = []
         sample_deg = 5.0 / 111111.0
@@ -364,16 +333,13 @@ async def main_page():
                 f = step / float(steps)
                 lx = p1[0] + f * (p2[0] - p1[0])
                 ly = p1[1] + f * (p2[1] - p1[1])
-                # Pass the pre-opened rasters to instantly get elevation
                 lz = get_elevation(lx, ly, open_rasters) + state['agl_m']
                 new_route_3d.append({'coords': [lx, ly, lz], 'action': state['current_action']})
                 
         final_pt = raw_waypoints_2d[-1]
         new_route_3d.append({'coords': [final_pt[0], final_pt[1], get_elevation(final_pt[0], final_pt[1], open_rasters) + state['agl_m']], 'action': state['current_action']})
         
-        # 2. OPTIMIZATION: Safely close all rasters to free up system memory
-        for src, _ in open_rasters:
-            src.close()
+        for src, _ in open_rasters: src.close()
             
         state['route'] = new_route_3d
         state['target_idx'] = 0
@@ -389,13 +355,8 @@ async def main_page():
                 features.append({'type': 'Feature', 'geometry': {'type': 'Polygon', 'coordinates': [coords]}})
             elif len(state['boundary']) == 2:
                 features.append({'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': [pt['coords'] for pt in state['boundary']]}})
-            
             for i, pt in enumerate(state['boundary']):
-                features.append({
-                    'type': 'Feature',
-                    'geometry': {'type': 'Point', 'coordinates': pt['coords']},
-                    'properties': {'label': str(i + 1)}
-                })
+                features.append({'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': pt['coords']}, 'properties': {'label': str(i + 1)}})
         ui.run_javascript(f"window.updateBoundary({json.dumps({'type': 'FeatureCollection', 'features': features})});")
 
     def update_path_display():
@@ -403,10 +364,8 @@ async def main_page():
         features = []
         if state['route']:
             coords_2d = [[state['lng'], state['lat']]]
-            if state['direction'] == 1:
-                coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][state['target_idx']:]])
-            else:
-                coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][:state['target_idx']+1][::-1]])
+            if state['direction'] == 1: coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][state['target_idx']:]])
+            else: coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][:state['target_idx']+1][::-1]])
             features.append({'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': coords_2d}})
         ui.run_javascript(f"window.updatePath({json.dumps({'type': 'FeatureCollection', 'features': features})});")
 
@@ -423,23 +382,22 @@ async def main_page():
                         pt_3d = [pt[0], pt[1], get_elevation(pt[0], pt[1]) + state['agl_m']]
                         state['route'].append({'coords': pt_3d, 'action': state['current_action']})
                         update_path_display()
-        except Exception:
-            pass 
+        except Exception: pass 
 
     def flight_controller():
-        if not state['running'] or not state['route']:
-            return
+        if not state['running'] or not state['route']: return
             
-        if state['target_idx'] >= len(state['route']):
-            state['target_idx'] = len(state['route']) - 1
+        if state['target_idx'] >= len(state['route']): state['target_idx'] = len(state['route']) - 1
             
         target = state['route'][state['target_idx']]['coords']
         dx, dy = target[0] - state['lng'], target[1] - state['lat']
         dz_deg = (target[2] - state['alt_msl']) / 111111.0 
         
         distance = math.sqrt(dx**2 + dy**2 + dz_deg**2)
+        # Apply the speed multiplier here
+        current_speed = SPEED * state['speed_mult']
         
-        if distance < SPEED:
+        if distance < current_speed:
             state['lng'], state['lat'], state['alt_msl'] = target[0], target[1], target[2]
             if len(state['route']) > 1:
                 state['target_idx'] += state['direction']
@@ -451,15 +409,17 @@ async def main_page():
                     state['target_idx'] = 1
             update_path_display()
         else:
-            state['lng'] += (dx / distance) * SPEED
-            state['lat'] += (dy / distance) * SPEED
-            state['alt_msl'] += (dz_deg / distance) * SPEED * 111111.0
+            state['lng'] += (dx / distance) * current_speed
+            state['lat'] += (dy / distance) * current_speed
+            state['alt_msl'] += (dz_deg / distance) * current_speed * 111111.0
             update_path_display()
             
         lng_label.set_text(f"Lon: {state['lng']:.5f}")
         lat_label.set_text(f"Lat: {state['lat']:.5f}")
         alt_msl_label.set_text(f"MSL: {state['alt_msl']:.1f}m")
-        ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']});")
+        # Notice we are now passing alt_msl directly to JavaScript!
+        # ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']});")
+        ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']});")
 
     ui.timer(0.1, poll_waypoints)
     ui.timer(0.1, flight_controller)
