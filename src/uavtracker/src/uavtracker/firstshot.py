@@ -83,8 +83,8 @@ map_init_js = f'''
     }};
 '''
 
-# Execute the JS initialization on the client
-ui.run_javascript(map_init_js)
+# Inject the initialization script directly into the HTML body so it runs on page load
+ui.add_body_html(f'<script>{map_init_js}</script>')
 
 # Python: UAV Simulation State
 state = {'angle': 0.0}
@@ -102,10 +102,14 @@ def update_uav_position():
     lat_label.set_text(f'Lat: {current_lat:.5f}')
     
     # 2. Push the new coordinates to MapLibre via JS execution
-    ui.run_javascript(f'window.updateUAV({current_lng}, {current_lat});')
+    try:
+        ui.run_javascript(f'window.updateUAV({current_lng}, {current_lat});')
+    except Exception:
+        # Silently ignore the websocket error if the browser hasn't connected yet
+        pass
 
 # Run the simulation at 10Hz (0.1 seconds)
 ui.timer(0.1, update_uav_position)
 
-# Bind to 0.0.0.0 to ensure web traffic routes correctly out of a running container
+# Bind to 0.0.0.0 to ensure web traffic routes correctly out of your container to the Windows host
 ui.run(host='0.0.0.0', port=8080, title="UAV Tracker")
