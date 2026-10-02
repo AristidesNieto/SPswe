@@ -7,72 +7,86 @@ ui.add_head_html('''
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
 ''')
 
+# Remove NiceGUI's default content padding so the map is truly full-screen
+ui.query('.nicegui-content').classes('p-0')
+
 # Tänikon, Aadorf, Switzerland coordinates
 CENTER_LNG, CENTER_LAT = 8.9056, 47.4795
 ALTITUDE_M = 30
 RADIUS = 0.003  # Roughly 300 meter radius for the UAV circle
 
-# UI: Create a full-screen container for the map
-ui.html('<div id="map" style="width: 100vw; height: 100vh;"></div>').classes('absolute top-0 left-0 -z-10')
+# UI: Create a full-screen container for the map (z-0 keeps it visible but in the back)
+ui.html('<div id="map" style="width: 100vw; height: 100vh;"></div>').classes('absolute top-0 left-0 z-0')
 
-# UI: Create a floating Heads-Up Display (HUD) for telemetry
+# UI: Create a floating Heads-Up Display (HUD) for telemetry (z-50 keeps it above the map)
 with ui.card().classes('absolute top-4 left-4 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200'):
     ui.label('UAV Telemetry (Tänikon)').classes('text-lg font-bold text-gray-800')
     lng_label = ui.label(f'Lon: {CENTER_LNG:.5f}').classes('font-mono')
     lat_label = ui.label(f'Lat: {CENTER_LAT:.5f}').classes('font-mono')
     alt_label = ui.label(f'Alt: {ALTITUDE_M} m (MSL)').classes('font-mono text-blue-600 font-bold')
 
-# JavaScript: Initialize MapLibre and the UAV marker
+# JavaScript: Safe Initialization with Vue/DOM check
 map_init_js = f'''
-    // Initialize the FOSS map
-    window.map = new maplibregl.Map({{
-        container: 'map',
-        style: {{
-            'version': 8,
-            'sources': {{
-                'osm': {{
+    function initMap() {{
+        // Wait until NiceGUI's Vue engine has actually rendered the map div
+        if (!document.getElementById('map')) {{
+            setTimeout(initMap, 50);
+            return;
+        }}
+        
+        // Prevent initializing twice
+        if (window.map) return;
+
+        // Initialize the FOSS map
+        window.map = new maplibregl.Map({{
+            container: 'map',
+            style: {{
+                'version': 8,
+                'sources': {{
+                    'osm': {{
+                        'type': 'raster',
+                        'tiles': ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'],
+                        'tileSize': 256,
+                        'attribution': '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                    }}
+                }},
+                'layers': [{{
+                    'id': 'osm',
                     'type': 'raster',
-                    'tiles': ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'],
-                    'tileSize': 256,
-                    'attribution': '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                }}
+                    'source': 'osm'
+                }}]
             }},
-            'layers': [{{
-                'id': 'osm',
-                'type': 'raster',
-                'source': 'osm'
-            }}]
-        }},
-        center: [{CENTER_LNG}, {CENTER_LAT}],
-        zoom: 14.5,
-        pitch: 55, // Pitched to give a 3D perspective
-        bearing: 0
-    }});
-
-    // Add the UAV marker once the map loads
-    window.map.on('load', () => {{
-        window.map.addSource('uav', {{
-            'type': 'geojson',
-            'data': {{
-                'type': 'Point',
-                'coordinates': [{CENTER_LNG}, {CENTER_LAT}]
-            }}
+            center: [{CENTER_LNG}, {CENTER_LAT}],
+            zoom: 14.5,
+            pitch: 55, // Pitched to give a 3D perspective
+            bearing: 0
         }});
 
-        window.map.addLayer({{
-            'id': 'uav-marker',
-            'type': 'circle',
-            'source': 'uav',
-            'paint': {{
-                'circle-radius': 8,
-                'circle-color': '#ef4444',
-                'circle-stroke-width': 3,
-                'circle-stroke-color': '#ffffff'
-            }}
-        }});
-    }});
+        // Add the UAV marker once the map loads
+        window.map.on('load', () => {{
+            window.map.addSource('uav', {{
+                'type': 'geojson',
+                'data': {{
+                    'type': 'Point',
+                    'coordinates': [{CENTER_LNG}, {CENTER_LAT}]
+                }}
+            }});
 
-    // Global function for NiceGUI to call
+            window.map.addLayer({{
+                'id': 'uav-marker',
+                'type': 'circle',
+                'source': 'uav',
+                'paint': {{
+                    'circle-radius': 8,
+                    'circle-color': '#ef4444',
+                    'circle-stroke-width': 3,
+                    'circle-stroke-color': '#ffffff'
+                }}
+            }});
+        }});
+    }}
+    
+    // Global function for NiceGUI to call on timer updates
     window.updateUAV = function(lng, lat) {{
         if (window.map && window.map.getSource('uav')) {{
             window.map.getSource('uav').setData({{
@@ -81,9 +95,11 @@ map_init_js = f'''
             }});
         }}
     }};
+
+    // Kick off the initialization loop
+    initMap();
 '''
 
-# Inject the initialization script directly into the HTML body so it runs on page load
 ui.add_body_html(f'<script>{map_init_js}</script>')
 
 # Python: UAV Simulation State
