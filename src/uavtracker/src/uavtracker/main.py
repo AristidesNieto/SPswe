@@ -35,7 +35,7 @@ state = {
     'pattern': 'Lawnmower',
     'spacing_m': 30,
     'agl_m': 30,       
-    'uav_size': 3.0, # NEW: Drone physical size in meters
+    'uav_size': 3.0, 
     'azimuth': 0, 
     'current_action': 'None',
     'sources': [],
@@ -65,29 +65,34 @@ async def main_page():
     ui.element('div').props('id=map').classes('w-screen h-screen absolute top-0 left-0 z-0')
     
     # ==========================================
-    # DIALOGS
+    # PERSISTENT PATH PLANNING PANEL (TOP LEFT)
+    # ==========================================
+    with ui.card().classes('absolute top-4 left-4 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 w-72 p-4'):
+        # Corrected image line
+        ui.image('/static/ISF_Instituts_Visual_EN_Zeichenfläche 1.png').classes('w-full h-auto mb-2')
+        
+        ui.label('Path Planning').classes('text-lg font-bold text-gray-800')
+        ui.radio(['Boundary', 'Waypoints', 'Set Start'], value='Boundary').bind_value_to(state, 'click_mode').classes('flex flex-row gap-2 text-sm mt-1')
+        ui.select(['None', 'Take Photo', 'Start Video', 'Stop Video', 'Hover 5s'], value='None', label='Action for next point').bind_value_to(state, 'current_action').classes('w-full mt-2')
+        ui.select(['Lawnmower', 'Grid'], value='Lawnmower', label='Coverage Pattern').bind_value_to(state, 'pattern').classes('w-full mt-2')
+        
+        ui.button('Compute Path', on_click=lambda: generate_coverage_path()).classes('bg-blue-600 text-white w-full mt-4')
+        ui.button('Clear Map', on_click=lambda: clear_all()).classes('bg-red-600 text-white w-full mt-2')
+
+    # ==========================================
+    # POPUP DIALOGS (Settings, Upload, Export)
     # ==========================================
     with ui.dialog() as dlg_help, ui.card().classes('w-96 max-h-[80vh] overflow-y-auto'):
         ui.label('Mission Planner Guide').classes('text-xl font-bold text-blue-800')
-        ui.markdown("""**Navigation**\n* **Pan:** Click and drag the map.\n* **Zoom:** Scroll wheel.\n* **3D View (Pitch & Rotate):** Hold Right-Click and drag.""")
+        ui.markdown("""**Navigation**\n* **Pan:** Click and drag the map.\n* **Zoom:** Scroll wheel.\n* **3D View:** Hold Right-Click and drag.""")
         ui.button('Close', on_click=dlg_help.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
     with ui.dialog() as dlg_flight, ui.card().classes('w-80'):
         ui.label('Flight Parameters').classes('text-lg font-bold')
         ui.number('Distance between lines (m)', value=30, min=2, max=500).bind_value_to(state, 'spacing_m').classes('w-full')
         ui.number('Target AGL Height (m)', value=30, min=5, max=500).bind_value_to(state, 'agl_m').classes('w-full')
-        # NEW: Field to change the physical size of the drone on the map
         ui.number('UAV Size (m)', value=3.0, min=0.5, max=50.0).bind_value_to(state, 'uav_size').classes('w-full')
         ui.button('Close', on_click=dlg_flight.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
-
-    with ui.dialog() as dlg_area, ui.card().classes('w-80'):
-        ui.label('Area & Path').classes('text-lg font-bold')
-        ui.radio(['Boundary', 'Waypoints', 'Set Start'], value='Boundary').bind_value_to(state, 'click_mode').classes('flex flex-row gap-4')
-        ui.select(['None', 'Take Photo', 'Start Video', 'Stop Video', 'Hover 5s'], value='None', label='Action for next point').bind_value_to(state, 'current_action').classes('w-full mt-2')
-        ui.select(['Lawnmower', 'Grid'], value='Lawnmower', label='Coverage Pattern').bind_value_to(state, 'pattern').classes('w-full mt-2')
-        ui.button('Compute Path', on_click=lambda: generate_coverage_path(show_warning=True)).classes('bg-blue-600 text-white w-full mt-4')
-        ui.button('Clear Map', on_click=lambda: clear_all()).classes('bg-red-600 text-white w-full mt-2')
-        ui.button('Close', on_click=dlg_area.close).classes('w-full mt-2 bg-gray-200 text-gray-800')
 
     with ui.dialog() as dlg_upload, ui.card().classes('w-80'):
         ui.label('Upload Geospatial Data').classes('text-lg font-bold')
@@ -130,7 +135,6 @@ async def main_page():
 
     with ui.dialog() as dlg_servers, ui.card().classes('w-96 max-h-[80vh] overflow-y-auto'):
         ui.label('Online Map Servers').classes('text-lg font-bold')
-        
         server_list = ui.column().classes('w-full mt-2')
         
         def update_server_state(server_dict, is_active):
@@ -149,7 +153,6 @@ async def main_page():
             new_name = ui.input('Server Name', placeholder='e.g. Satellite Imagery').classes('w-full')
             new_url = ui.input('Tile URL (XYZ)', placeholder='https://.../{z}/{x}/{y}.png').classes('w-full')
             new_type = ui.select(['raster', 'raster-dem'], value='raster', label='Type').classes('w-full mt-2')
-            
             def add_server():
                 if new_name.value and new_url.value:
                     new_id = new_name.value.lower().replace(' ', '-')
@@ -170,11 +173,10 @@ async def main_page():
         ui.button('Close', on_click=dlg_export.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
     # ==========================================
-    # FLOATING TOP TOOLBAR
+    # FLOATING TOP TOOLBAR 
     # ==========================================
     with ui.row().classes('absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 rounded-full px-2 py-1 gap-2 items-center'):
         with ui.button(icon='flight_takeoff', on_click=dlg_flight.open).props('flat round'): ui.tooltip('Flight Parameters')
-        with ui.button(icon='polyline', on_click=dlg_area.open).props('flat round'): ui.tooltip('Area Definition & Path')
         with ui.button(icon='upload_file', on_click=dlg_upload.open).props('flat round'): ui.tooltip('Upload DSM/DTM/Ortho')
         with ui.button(icon='layers', on_click=lambda: (refresh_sources_list(), dlg_sources.open())).props('flat round'): ui.tooltip('Manage Local Sources')
         with ui.button(icon='public', on_click=lambda: (refresh_servers(), dlg_servers.open())).props('flat round'): ui.tooltip('Online Map Servers')
@@ -183,12 +185,6 @@ async def main_page():
         ui.separator().props('vertical').classes('mx-2')
         with ui.button(icon='play_arrow', on_click=lambda: state.update(running=True)).props('flat round text-green'): ui.tooltip('Start UAV Simulation')
         with ui.button(icon='stop', on_click=lambda: state.update(running=False)).props('flat round text-red'): ui.tooltip('Stop UAV Simulation')
-
-    # ==========================================
-    # TOP RIGHT LOGO PLACEHOLDER
-    # ==========================================
-    with ui.element('div').classes('absolute top-4 right-4 z-50 pointer-events-none bg-white/80 backdrop-blur p-2 rounded shadow-sm'):
-        ui.image('/static/ISF_Instituts_Visual_EN_Zeichenfläche 1.png').classes('w-56 h-auto')
 
     # ==========================================
     # BOTTOM LEFT TELEMETRY HUD
@@ -211,7 +207,7 @@ async def main_page():
         def on_slider_change(e):
             compass_icon.style(f'transform: rotate({e.value}deg);')
             if len(state['boundary']) >= 3:
-                generate_coverage_path(show_warning=False)
+                generate_coverage_path()
                 
         ui.slider(min=0, max=180, step=1, value=0, on_change=on_slider_change).bind_value_to(state, 'azimuth').classes('flex-1')
         ui.label().bind_text_from(state, 'azimuth', backward=lambda v: f"{int(v)}°").classes('text-sm font-mono font-bold text-blue-600 w-10 text-right')
@@ -296,11 +292,19 @@ async def main_page():
                     except Exception: continue
         dist = math.sqrt((lng - CENTER_LNG)**2 + (lat - CENTER_LAT)**2)
         return 530.0 + (100.0 * math.exp(-(dist**2) / 0.00005))
+        
+    def check_and_close_route():
+        """If the user places the last waypoint very close to the first, snap it to create a perfect continuous loop."""
+        if len(state['route']) > 2:
+            p1 = state['route'][0]['coords']
+            p2 = state['route'][-1]['coords']
+            dx, dy = p1[0] - p2[0], p1[1] - p2[1]
+            dist_m = math.sqrt((dx * 111111.0 * math.cos(math.radians(CENTER_LAT)))**2 + (dy * 111111.0)**2)
+            if dist_m < 15.0:
+                state['route'][-1]['coords'] = p1.copy()
 
-    def generate_coverage_path(show_warning=True):
+    def generate_coverage_path():
         if len(state['boundary']) < 3:
-            if show_warning:
-                ui.notify('Please draw a boundary with at least 3 points first.', type='warning')
             return
             
         poly = Polygon([pt['coords'] for pt in state['boundary']])
@@ -327,7 +331,6 @@ async def main_page():
                     while x <= maxx:
                         sweeps.append(LineString([(x, miny - 0.01), (x, maxy + 0.01)]))
                         x += spacing_deg_x
-                
                 if reverse_sweeps: sweeps.reverse()
                 
                 left_to_right = start_left
@@ -342,7 +345,6 @@ async def main_page():
                     if not left_to_right: seg_coords.reverse()
                     coords_list.extend(seg_coords)
                     left_to_right = not left_to_right
-            
             append(is_vertical=False)
             if state['pattern'] == 'Grid':
                 append(is_vertical=True)
@@ -405,8 +407,8 @@ async def main_page():
             
         state['route'] = new_route_3d
         state['target_idx'] = 0
+        check_and_close_route() # Ensure loop logic is checked
         update_path_display()
-        if show_warning: dlg_area.close() 
 
     def update_boundary_display():
         features = []
@@ -419,17 +421,28 @@ async def main_page():
                 features.append({'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': [pt['coords'] for pt in state['boundary']]}})
             for i, pt in enumerate(state['boundary']):
                 features.append({'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': pt['coords']}, 'properties': {'label': str(i + 1)}})
-        
         ui.run_javascript(f"window.updateBoundary({json.dumps({'type': 'FeatureCollection', 'features': features})});")
 
     def update_path_display():
         wp_label.set_text(f"Waypoints: {len(state['route'])}")
         features = []
         if state['route']:
+            # Render the continuous track lines
             coords_2d = [[state['lng'], state['lat']]]
-            if state['direction'] == 1: coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][state['target_idx']:]])
-            else: coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][:state['target_idx']+1][::-1]])
+            if state['direction'] == 1: 
+                coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][state['target_idx']:]])
+            else: 
+                coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][:state['target_idx']+1][::-1]])
             features.append({'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': coords_2d}})
+            
+            # Render the stationary waypoint dots and numerical labels
+            for i, p in enumerate(state['route']):
+                features.append({
+                    'type': 'Feature', 
+                    'geometry': {'type': 'Point', 'coordinates': [p['coords'][0], p['coords'][1]]}, 
+                    'properties': {'label': str(i + 1)}
+                })
+                
         ui.run_javascript(f"window.updatePath({json.dumps({'type': 'FeatureCollection', 'features': features})});")
 
     async def poll_waypoints():
@@ -444,7 +457,6 @@ async def main_page():
                         lng_label.set_text(f"Lon: {state['lng']:.5f}")
                         lat_label.set_text(f"Lat: {state['lat']:.5f}")
                         alt_msl_label.set_text(f"MSL: {state['alt_msl']:.1f}m")
-                        # UPDATED WITH UAV_SIZE
                         ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']}, {state['uav_size']});")
                     elif state['click_mode'] == 'Boundary':
                         state['boundary'].append({'coords': pt, 'action': state['current_action']})
@@ -452,6 +464,7 @@ async def main_page():
                     else:
                         pt_3d = [pt[0], pt[1], get_elevation(pt[0], pt[1]) + state['agl_m']]
                         state['route'].append({'coords': pt_3d, 'action': state['current_action']})
+                        check_and_close_route() # Snap to start if the user clicked very close to it
                         update_path_display()
         except Exception as e:
             pass
@@ -474,11 +487,20 @@ async def main_page():
             if dist <= movement_budget:
                 state['lng'], state['lat'], state['alt_msl'] = target[0], target[1], target[2]
                 movement_budget -= dist
+                
                 if len(state['route']) > 1:
+                    # Detect if route forms a mathematically closed loop 
+                    is_closed_loop = (state['route'][0]['coords'] == state['route'][-1]['coords'])
+                    
                     state['target_idx'] += state['direction']
+                    
                     if state['target_idx'] >= len(state['route']):
-                        state['direction'] = -1
-                        state['target_idx'] = len(state['route']) - 2 
+                        if is_closed_loop:
+                            state['direction'] = 1
+                            state['target_idx'] = 1 # Orbit endlessly without stopping
+                        else:
+                            state['direction'] = -1
+                            state['target_idx'] = len(state['route']) - 2 
                     elif state['target_idx'] < 0:
                         state['direction'] = 1
                         state['target_idx'] = 1
@@ -492,7 +514,6 @@ async def main_page():
         lng_label.set_text(f"Lon: {state['lng']:.5f}")
         lat_label.set_text(f"Lat: {state['lat']:.5f}")
         alt_msl_label.set_text(f"MSL: {state['alt_msl']:.1f}m")
-        # UPDATED WITH UAV_SIZE
         ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']}, {state['uav_size']});")
 
     ui.timer(0.1, poll_waypoints)

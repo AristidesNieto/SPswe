@@ -46,20 +46,40 @@ window.initMap = function () {
         window.mapInstance.addLayer({ 'id': 'boundary-line', 'type': 'line', 'source': 'boundary', 'paint': { 'line-color': '#ca8a04', 'line-width': 2, 'line-dasharray': [2, 2] } });
         window.mapInstance.addLayer({ 'id': 'boundary-points', 'type': 'circle', 'source': 'boundary', 'paint': { 'circle-radius': 10, 'circle-color': '#facc15', 'circle-stroke-width': 2, 'circle-stroke-color': '#ca8a04' } });
 
-        // --- Path Layers (Ground Track) ---
+        // --- Path Layers (Ground Track, Points, and Labels) ---
         window.mapInstance.addSource('path', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
-        window.mapInstance.addLayer({ 'id': 'path-line', 'type': 'line', 'source': 'path', 'paint': { 'line-color': '#3b82f6', 'line-width': 3 } });
+        window.mapInstance.addLayer({ 'id': 'path-line', 'type': 'line', 'source': 'path', 'filter': ['==', '$type', 'LineString'], 'paint': { 'line-color': '#3b82f6', 'line-width': 3 } });
 
-        // --- UAV Shadow (Now a geographic Polygon perfectly matching the 3D disk) ---
-        window.mapInstance.addSource('uav-shadow', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
+        // NEW: Draw waypoints as circles
         window.mapInstance.addLayer({
-            'id': 'uav-shadow-layer',
-            'type': 'fill',
-            'source': 'uav-shadow',
-            'paint': { 'fill-color': '#000000', 'fill-opacity': 0.5 }
+            'id': 'path-points',
+            'type': 'circle',
+            'source': 'path',
+            'filter': ['==', '$type', 'Point'],
+            'paint': { 'circle-radius': 6, 'circle-color': '#3b82f6', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' }
         });
 
-        // --- UAV True 3D Marker ---
+        // NEW: Draw numbered labels next to path points
+        window.mapInstance.addLayer({
+            'id': 'path-labels',
+            'type': 'symbol',
+            'source': 'path',
+            'filter': ['==', '$type', 'Point'],
+            'layout': {
+                'text-field': ['get', 'label'],
+                'text-font': ['Open Sans Regular'],
+                'text-size': 12,
+                'text-anchor': 'left',
+                'text-offset': [0.8, 0],
+                'text-allow-overlap': true
+            },
+            'paint': { 'text-color': '#000000', 'text-halo-color': '#ffffff', 'text-halo-width': 2 }
+        });
+
+        // --- UAV Shadow & True 3D Marker ---
+        window.mapInstance.addSource('uav-shadow', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
+        window.mapInstance.addLayer({ 'id': 'uav-shadow-layer', 'type': 'fill', 'source': 'uav-shadow', 'paint': { 'fill-color': '#000000', 'fill-opacity': 0.5 } });
+
         window.mapInstance.addSource('uav-marker', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
         window.mapInstance.addLayer({
             'id': 'uav-marker-layer',
@@ -86,13 +106,10 @@ window.syncServers = function (servers) {
         setTimeout(() => window.syncServers(servers), 500);
         return;
     }
-
     let activeDem = null;
-
     servers.forEach(server => {
         const sourceId = server.id;
         const layerId = (server.id === 'osm') ? 'osm' : server.id + '-layer';
-
         if (server.active) {
             if (!window.mapInstance.getSource(sourceId)) {
                 window.mapInstance.addSource(sourceId, {
@@ -101,37 +118,30 @@ window.syncServers = function (servers) {
                     'tileSize': 256,
                     ...(server.type === 'raster-dem' ? { 'encoding': 'terrarium', 'maxzoom': 14 } : {})
                 });
-
                 if (server.type === 'raster') {
-                    window.mapInstance.addLayer({
-                        'id': layerId,
-                        'type': 'raster',
-                        'source': sourceId,
-                        'layout': { 'visibility': 'visible' }
-                    }, 'boundary-fill');
+                    window.mapInstance.addLayer({ 'id': layerId, 'type': 'raster', 'source': sourceId, 'layout': { 'visibility': 'visible' } }, 'boundary-fill');
                 }
             } else if (server.type === 'raster' && window.mapInstance.getLayer(layerId)) {
                 window.mapInstance.setLayoutProperty(layerId, 'visibility', 'visible');
             }
             if (server.type === 'raster-dem') activeDem = sourceId;
         } else {
-            if (server.type === 'raster' && window.mapInstance.getLayer(layerId)) {
-                window.mapInstance.setLayoutProperty(layerId, 'visibility', 'none');
-            }
+            if (server.type === 'raster' && window.mapInstance.getLayer(layerId)) window.mapInstance.setLayoutProperty(layerId, 'visibility', 'none');
         }
     });
-
     if (activeDem) window.mapInstance.setTerrain({ 'source': activeDem, 'exaggeration': 1.5 });
     else window.mapInstance.setTerrain(null);
 };
 
 window.updateUAV = function (lng, lat, alt_msl, agl, uavSize) {
     if (!agl) agl = 30;
-    if (!uavSize) uavSize = 3.0; // Default to 3 meters
+    if (!uavSize) uavSize = 3.0;
 
     if (window.mapInstance) {
-        // Calculate the physical geometry in meters
-        const radiusMeters = uavSize / 2.0;
+        const currentZoom = window.mapInstance.getZoom();
+        const metersPerPixel = (156543.03392 * Math.cos(lat * Math.PI / 180)) / Math.pow(2, currentZoom);
+
+        const radiusMeters = (uavSize / 2.0) * metersPerPixel;
         const radiusDegLat = radiusMeters / 111111.0;
         const radiusDegLng = radiusMeters / (111111.0 * Math.cos(lat * Math.PI / 180));
 
@@ -142,17 +152,11 @@ window.updateUAV = function (lng, lat, alt_msl, agl, uavSize) {
         }
         circleCoords.push(circleCoords[0]);
 
-        // Update the ground shadow (flat polygon)
         if (window.mapInstance.getSource('uav-shadow')) {
-            window.mapInstance.getSource('uav-shadow').setData({
-                'type': 'Feature',
-                'geometry': { 'type': 'Polygon', 'coordinates': [circleCoords] }
-            });
+            window.mapInstance.getSource('uav-shadow').setData({ 'type': 'Feature', 'geometry': { 'type': 'Polygon', 'coordinates': [circleCoords] } });
         }
-
-        // Update the 3D marker (extruded polygon)
         if (window.mapInstance.getSource('uav-marker')) {
-            const thickness = Math.min(0.5, radiusMeters / 2.0); // Keep disk proportionally thin
+            const thickness = Math.min(0.5, radiusMeters / 2.0);
             window.mapInstance.getSource('uav-marker').setData({
                 'type': 'Feature',
                 'properties': { 'base': agl - thickness, 'height': agl + thickness },
