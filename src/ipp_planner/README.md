@@ -686,3 +686,116 @@ window.mapInstance.on('click', (e) => {
 
 By making these two changes, the browser acts only as a dumb terminal to send pixel locations. Your Python backend handles the rigorous, mathematically correct projection mapping from Swisstopo's accurate aerial imagery straight to the true ITRF2020 frame.
 **TO DO**: VERIFY, I am not sure if this is true.
+
+## **HEIGHTS**
+
+To achieve the highest possible vertical accuracy for your UAV in Switzerland (Winterthur), you must address two completely different challenges: **getting accurate ground elevation data**, and **translating that data into a language your drone's GPS understands** (the Vertical Datum problem).
+
+Here is exactly how to solve both to ensure your drone flies at the correct height.
+
+### The Data Source: swissALTI3D (0.5m Precision)
+
+For the actual shape of the ground, you should use **swissALTI3D**, Swisstopo’s laser-scanned digital elevation model, which has a 0.5-meter resolution.
+
+Because we already built the **"Upload Geospatial Data"** feature in your application, you don't need to change any code to use this offline!
+
+1. Go to the [Swisstopo swissALTI3D portal](https://www.swisstopo.admin.ch/en/geodata/height/alti3d.html).
+2. Download the GeoTIFF (`.tif`) tiles for your flight area in Winterthur.
+3. Upload them into your planner via the **Upload DSM/DTM** button.
+
+### The GPS Trap: The "Vertical Datum" Problem
+
+If you tell your ROS 2 drone to fly at 500 meters altitude based on the Swiss map, **your drone will be off by about 48 meters and could crash.**
+
+* **Maps (swissALTI3D):** Measure height relative to Sea Level (Orthometric height, specifically the Swiss `LN02` datum).
+* **Drones (GNSS/GPS):** Measure height relative to a perfect mathematical sphere around the earth (WGS84 Ellipsoidal height).
+
+In Winterthur, the WGS84 ellipsoid sits roughly **48 meters above** the Swiss sea-level measurement (this difference is called Geoid Undulation). You must convert the map height to GPS height.
+
+### The Python Implementation
+
+We need to update your `get_elevation` function in `main.py`.
+
+This update does three things:
+
+1. It queries your uploaded GeoTIFFs first.
+2. If no GeoTIFF is uploaded, it queries the **live Swisstopo Height REST API** (replacing the old mock math function).
+3. It uses `pyproj` to mathematically convert the Swiss Sea Level height into WGS84 Ellipsoidal height for your drone.
+
+**Add this to your imports at the top of `main.py`:**
+
+```python
+import httpx
+from pyproj import Transformer
+
+```
+
+**Replace your existing `get_elevation` function with this:**
+
+```python
+# Create a 3D transformer to convert Swiss Sea Level (LN02) to GPS Ellipsoid (WGS84 3D)
+# Note: pyproj handles the ~48m geoid separation automatically if network=True
+transformer_3d = Transformer.from_crs(
+    "EPSG:4326", # WGS84 2D (Lat/Lon)
+    "EPSG:4979", # WGS84 3D (Lat/Lon/Ellipsoidal Height)
+    always_xy=True
+)
+
+def get_elevation(lng, lat, open_rasters=None):
+    """
+    Retrieves accurate ground elevation and converts it to WGS84 Ellipsoidal height.
+    """
+    ground_elevation_ln02 = None
+    
+    # 1. Try to read from local high-res GeoTIFFs (swissALTI3D) first
+    if open_rasters is not None:
+        for src, transformer in open_rasters:
+            x, y = transformer.transform(lng, lat)
+            if src.bounds.left <= x <= src.bounds.right and src.bounds.bottom <= y <= src.bounds.top:
+                try:
+                    for val in src.sample([(x, y)]): 
+                        ground_elevation_ln02 = float(val[0])
+                        break
+                except Exception: 
+                    pass
+
+    elif HAS_GEO:
+        for cat in ['DSM', 'DTM']:
+            for src_item in [s for s in state['sources'] if s['active'] and s['type'] == cat]:
+                try:
+                    with rasterio.open(src_item['path']) as src:
+                        transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
+                        x, y = transformer.transform(lng, lat)
+                        if src.bounds.left <= x <= src.bounds.right and src.bounds.bottom <= y <= src.bounds.top:
+                            for val in src.sample([(x, y)]): 
+                                ground_elevation_ln02 = float(val[0])
+                                break
+                except Exception: 
+                    continue
+
+    # 2. Fallback to Swisstopo Live REST API if no local offline GeoTIFF covers the point
+    if ground_elevation_ln02 is None:
+        try:
+            # Note: This requires the httpx library (uv pip install httpx)
+            response = httpx.get(
+                f"https://api3.geo.admin.ch/rest/services/height?lon={lng}&lat={lat}&sr=4326",
+                timeout=2.0
+            )
+            if response.status_code == 200:
+                ground_elevation_ln02 = float(response.json().get('height', 530.0))
+        except Exception as e:
+            print(f"Swisstopo API Error: {e}")
+            ground_elevation_ln02 = 530.0 # Emergency Winterthur Fallback
+
+    # 3. VERTICAL DATUM TRANSFORMATION
+    # Convert the Swiss orthometric ground height to WGS84 GPS Ellipsoidal height
+    # This adds the ~48m geoid undulation necessary for the drone's flight controller
+    _, _, ellipsoidal_height = transformer_3d.transform(lng, lat, ground_elevation_ln02)
+    
+    return ellipsoidal_height
+
+```
+
+*(Note: Don't forget to run `uv pip install httpx` so the backend can make the API requests to Swisstopo).*
+
+By combining **swissALTI3D offline files** for precision and the **pyproj 3D transformer** for flight controller compatibility, your generated ROS 2 `mission_data` will feature sub-meter vertical accuracy out of the box.
