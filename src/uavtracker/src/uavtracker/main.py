@@ -5,6 +5,7 @@ import math
 import json
 import os
 import time
+import traceback
 
 try:
     import rasterio
@@ -68,7 +69,6 @@ async def main_page():
     # PERSISTENT PATH PLANNING PANEL (TOP LEFT)
     # ==========================================
     with ui.card().classes('absolute top-4 left-4 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 w-72 p-4'):
-        # Corrected image line
         ui.image('/static/ISF_Instituts_Visual_EN_Zeichenfläche 1.png').classes('w-full h-auto mb-2')
         
         ui.label('Path Planning').classes('text-lg font-bold text-gray-800')
@@ -207,7 +207,7 @@ async def main_page():
         def on_slider_change(e):
             compass_icon.style(f'transform: rotate({e.value}deg);')
             if len(state['boundary']) >= 3:
-                generate_coverage_path()
+                generate_coverage_path(show_warning=False)
                 
         ui.slider(min=0, max=180, step=1, value=0, on_change=on_slider_change).bind_value_to(state, 'azimuth').classes('flex-1')
         ui.label().bind_text_from(state, 'azimuth', backward=lambda v: f"{int(v)}°").classes('text-sm font-mono font-bold text-blue-600 w-10 text-right')
@@ -294,7 +294,6 @@ async def main_page():
         return 530.0 + (100.0 * math.exp(-(dist**2) / 0.00005))
         
     def check_and_close_route():
-        """If the user places the last waypoint very close to the first, snap it to create a perfect continuous loop."""
         if len(state['route']) > 2:
             p1 = state['route'][0]['coords']
             p2 = state['route'][-1]['coords']
@@ -303,8 +302,10 @@ async def main_page():
             if dist_m < 15.0:
                 state['route'][-1]['coords'] = p1.copy()
 
-    def generate_coverage_path():
+    def generate_coverage_path(show_warning=True):
         if len(state['boundary']) < 3:
+            if show_warning:
+                ui.notify('Please draw a boundary with at least 3 points first.', type='warning')
             return
             
         poly = Polygon([pt['coords'] for pt in state['boundary']])
@@ -407,7 +408,7 @@ async def main_page():
             
         state['route'] = new_route_3d
         state['target_idx'] = 0
-        check_and_close_route() # Ensure loop logic is checked
+        check_and_close_route() 
         update_path_display()
 
     def update_boundary_display():
@@ -427,7 +428,6 @@ async def main_page():
         wp_label.set_text(f"Waypoints: {len(state['route'])}")
         features = []
         if state['route']:
-            # Render the continuous track lines
             coords_2d = [[state['lng'], state['lat']]]
             if state['direction'] == 1: 
                 coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][state['target_idx']:]])
@@ -435,7 +435,6 @@ async def main_page():
                 coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][:state['target_idx']+1][::-1]])
             features.append({'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': coords_2d}})
             
-            # Render the stationary waypoint dots and numerical labels
             for i, p in enumerate(state['route']):
                 features.append({
                     'type': 'Feature', 
@@ -464,10 +463,11 @@ async def main_page():
                     else:
                         pt_3d = [pt[0], pt[1], get_elevation(pt[0], pt[1]) + state['agl_m']]
                         state['route'].append({'coords': pt_3d, 'action': state['current_action']})
-                        check_and_close_route() # Snap to start if the user clicked very close to it
+                        check_and_close_route() 
                         update_path_display()
         except Exception as e:
-            pass
+            print("Python Polling Error:", e)
+            traceback.print_exc()
 
     def flight_controller():
         if not state['running'] or not state['route']: return
@@ -489,15 +489,13 @@ async def main_page():
                 movement_budget -= dist
                 
                 if len(state['route']) > 1:
-                    # Detect if route forms a mathematically closed loop 
                     is_closed_loop = (state['route'][0]['coords'] == state['route'][-1]['coords'])
-                    
                     state['target_idx'] += state['direction']
                     
                     if state['target_idx'] >= len(state['route']):
                         if is_closed_loop:
                             state['direction'] = 1
-                            state['target_idx'] = 1 # Orbit endlessly without stopping
+                            state['target_idx'] = 1 
                         else:
                             state['direction'] = -1
                             state['target_idx'] = len(state['route']) - 2 
@@ -519,4 +517,4 @@ async def main_page():
     ui.timer(0.1, poll_waypoints)
     ui.timer(0.1, flight_controller)
 
-ui.run(host='0.0.0.0', port=8091, title="intelligent path planer - IPP")
+ui.run(host='127.0.0.1', port=8091, title="intelligent path planer - IPP")
