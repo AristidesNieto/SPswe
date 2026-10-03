@@ -35,7 +35,7 @@ state = {
     'pattern': 'Lawnmower',
     'spacing_m': 30,
     'agl_m': 30,       
-    'angle_deg': 0, 
+    'azimuth': 0, # CHANGED: Replaced angle_deg with true azimuth
     'current_action': 'None',
     'sources': [],
     'map_servers': [
@@ -201,17 +201,20 @@ async def main_page():
     # BOTTOM CENTER AZIMUTH / HEADING SLIDER
     # ==========================================
     with ui.card().classes('absolute bottom-8 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 flex flex-row items-center p-2 w-96 gap-4'):
-        ui.icon('explore', size='sm').classes('text-gray-600')
+        # DYNAMIC COMPASS NEEDLE: Initialized as a variable so we can safely manipulate its CSS
+        compass_icon = ui.icon('navigation', size='sm').classes('text-blue-600').style(f"transform: rotate({state['azimuth']}deg); transition: transform 0.1s;")
+        
         ui.label('AZIMUTH').classes('text-[10px] font-bold text-gray-800')
         
-        # When slider changes, instantly recalculate the path if boundary is present
         def on_slider_change(e):
+            # Safely apply the CSS rotation dynamically
+            compass_icon.style(f'transform: rotate({e.value}deg);')
+            
             if len(state['boundary']) >= 3:
                 generate_coverage_path(show_warning=False)
                 
-        ui.slider(min=0, max=180, step=1, value=0, on_change=on_slider_change).bind_value_to(state, 'angle_deg').classes('flex-1')
-        ui.label().bind_text_from(state, 'angle_deg', backward=lambda v: f"{int(v)}°").classes('text-sm font-mono font-bold text-blue-600 w-10 text-right')
-
+        ui.slider(min=0, max=180, step=1, value=0, on_change=on_slider_change).bind_value_to(state, 'azimuth').classes('flex-1')
+        ui.label().bind_text_from(state, 'azimuth', backward=lambda v: f"{int(v)}°").classes('text-sm font-mono font-bold text-blue-600 w-10 text-right')
     # ==========================================
     # RIGHT SIDE SPEED SLIDER
     # ==========================================
@@ -302,7 +305,12 @@ async def main_page():
         poly = Polygon([pt['coords'] for pt in state['boundary']])
         centroid = poly.centroid
         
-        rotated_poly = rotate(poly, -state['angle_deg'], origin=centroid)
+        # MATH CORRECTION: Azimuth to geometric Math Angle. 
+        # Standard maps: 0° is North (Azimuth). Math geometry: 0° is East.
+        # Transformation: Math Angle = 90 - Azimuth
+        angle_math = 90 - state['azimuth']
+        
+        rotated_poly = rotate(poly, -angle_math, origin=centroid)
         minx, miny, maxx, maxy = rotated_poly.bounds
         
         spacing_deg_y = state['spacing_m'] / 111111.0
@@ -356,7 +364,8 @@ async def main_page():
         best_variant = None
         min_dist = float('inf')
         for v in variants:
-            first_pt = rotate(Point(v[0]), state['angle_deg'], origin=centroid)
+            # Re-rotate the start point of this variant back to real-world coordinates to check distance
+            first_pt = rotate(Point(v[0]), angle_math, origin=centroid)
             dx = first_pt.x - state['lng']
             dy = first_pt.y - state['lat']
             dist = dx*dx + dy*dy
@@ -366,7 +375,7 @@ async def main_page():
                 
         raw_waypoints_2d = []
         for pt in best_variant:
-            rot_pt = rotate(Point(pt), state['angle_deg'], origin=centroid)
+            rot_pt = rotate(Point(pt), angle_math, origin=centroid)
             raw_waypoints_2d.append([rot_pt.x, rot_pt.y])
             
         open_rasters = []
@@ -401,7 +410,7 @@ async def main_page():
         state['route'] = new_route_3d
         state['target_idx'] = 0
         update_path_display()
-        if show_warning: dlg_area.close() # Only close dialog if manually clicked
+        if show_warning: dlg_area.close() 
 
     def update_boundary_display():
         features = []
