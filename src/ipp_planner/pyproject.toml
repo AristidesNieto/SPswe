@@ -1,6 +1,6 @@
 [project]
 name = "ipp_planner"
-version = "0.0.2"
+version = "0.0.7"
 description = "Simple UAV path planing tool GEN-AI made"
 readme = "README.md"
 authors = [
