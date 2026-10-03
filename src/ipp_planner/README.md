@@ -1,4 +1,4 @@
-# About
+# About <br> ISF's Intelligent Path Planner - IPP
 The **Intelligent Path Planner (IPP)** is a web-based UAV mission planning and 3D simulation platform built with Python, NiceGUI, and MapLibre GL JS. It is designed to generate complex, terrain-following flight paths while visualizing the vehicle's movements in a fully interactive 3D map environment.
 
 **Core Capabilities:**
