@@ -50,10 +50,16 @@ window.initMap = function () {
         window.mapInstance.addSource('path', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
         window.mapInstance.addLayer({ 'id': 'path-line', 'type': 'line', 'source': 'path', 'paint': { 'line-color': '#3b82f6', 'line-width': 3 } });
 
-        // --- UAV Shadow & Marker ---
-        window.mapInstance.addSource('uav-shadow', { 'type': 'geojson', 'data': { 'type': 'Point', 'coordinates': [window.MAP_CONFIG.lng, window.MAP_CONFIG.lat] } });
-        window.mapInstance.addLayer({ 'id': 'uav-shadow-layer', 'type': 'circle', 'source': 'uav-shadow', 'paint': { 'circle-radius': 12, 'circle-color': '#000', 'circle-blur': 0.8, 'circle-opacity': 0.5 } });
+        // --- UAV Shadow (Now a geographic Polygon perfectly matching the 3D disk) ---
+        window.mapInstance.addSource('uav-shadow', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
+        window.mapInstance.addLayer({
+            'id': 'uav-shadow-layer',
+            'type': 'fill',
+            'source': 'uav-shadow',
+            'paint': { 'fill-color': '#000000', 'fill-opacity': 0.5 }
+        });
 
+        // --- UAV True 3D Marker ---
         window.mapInstance.addSource('uav-marker', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
         window.mapInstance.addLayer({
             'id': 'uav-marker-layer',
@@ -119,24 +125,37 @@ window.syncServers = function (servers) {
     else window.mapInstance.setTerrain(null);
 };
 
-window.updateUAV = function (lng, lat, alt_msl, agl) {
+window.updateUAV = function (lng, lat, alt_msl, agl, uavSize) {
     if (!agl) agl = 30;
+    if (!uavSize) uavSize = 3.0; // Default to 3 meters
+
     if (window.mapInstance) {
-        if (window.mapInstance.getSource('uav-shadow')) window.mapInstance.getSource('uav-shadow').setData({ 'type': 'Point', 'coordinates': [lng, lat] });
+        // Calculate the physical geometry in meters
+        const radiusMeters = uavSize / 2.0;
+        const radiusDegLat = radiusMeters / 111111.0;
+        const radiusDegLng = radiusMeters / (111111.0 * Math.cos(lat * Math.PI / 180));
+
+        const circleCoords = [];
+        for (let i = 0; i < 32; i++) {
+            const theta = (i / 32) * (2 * Math.PI);
+            circleCoords.push([lng + (radiusDegLng * Math.cos(theta)), lat + (radiusDegLat * Math.sin(theta))]);
+        }
+        circleCoords.push(circleCoords[0]);
+
+        // Update the ground shadow (flat polygon)
+        if (window.mapInstance.getSource('uav-shadow')) {
+            window.mapInstance.getSource('uav-shadow').setData({
+                'type': 'Feature',
+                'geometry': { 'type': 'Polygon', 'coordinates': [circleCoords] }
+            });
+        }
+
+        // Update the 3D marker (extruded polygon)
         if (window.mapInstance.getSource('uav-marker')) {
-            // INCREASED to 12 meters to make it highly visible and match track widths visually
-            const radiusMeters = 12.0;
-            const radiusDegLat = radiusMeters / 111111.0;
-            const radiusDegLng = radiusMeters / (111111.0 * Math.cos(lat * Math.PI / 180));
-            const circleCoords = [];
-            for (let i = 0; i < 32; i++) {
-                const theta = (i / 32) * (2 * Math.PI);
-                circleCoords.push([lng + (radiusDegLng * Math.cos(theta)), lat + (radiusDegLat * Math.sin(theta))]);
-            }
-            circleCoords.push(circleCoords[0]);
+            const thickness = Math.min(0.5, radiusMeters / 2.0); // Keep disk proportionally thin
             window.mapInstance.getSource('uav-marker').setData({
                 'type': 'Feature',
-                'properties': { 'base': agl - 0.5, 'height': agl + 0.5 },
+                'properties': { 'base': agl - thickness, 'height': agl + thickness },
                 'geometry': { 'type': 'Polygon', 'coordinates': [circleCoords] }
             });
         }

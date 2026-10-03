@@ -35,7 +35,8 @@ state = {
     'pattern': 'Lawnmower',
     'spacing_m': 30,
     'agl_m': 30,       
-    'azimuth': 0, # CHANGED: Replaced angle_deg with true azimuth
+    'uav_size': 3.0, # NEW: Drone physical size in meters
+    'azimuth': 0, 
     'current_action': 'None',
     'sources': [],
     'map_servers': [
@@ -75,6 +76,8 @@ async def main_page():
         ui.label('Flight Parameters').classes('text-lg font-bold')
         ui.number('Distance between lines (m)', value=30, min=2, max=500).bind_value_to(state, 'spacing_m').classes('w-full')
         ui.number('Target AGL Height (m)', value=30, min=5, max=500).bind_value_to(state, 'agl_m').classes('w-full')
+        # NEW: Field to change the physical size of the drone on the map
+        ui.number('UAV Size (m)', value=3.0, min=0.5, max=50.0).bind_value_to(state, 'uav_size').classes('w-full')
         ui.button('Close', on_click=dlg_flight.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
     with ui.dialog() as dlg_area, ui.card().classes('w-80'):
@@ -201,20 +204,18 @@ async def main_page():
     # BOTTOM CENTER AZIMUTH / HEADING SLIDER
     # ==========================================
     with ui.card().classes('absolute bottom-8 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 flex flex-row items-center p-2 w-96 gap-4'):
-        # DYNAMIC COMPASS NEEDLE: Initialized as a variable so we can safely manipulate its CSS
         compass_icon = ui.icon('navigation', size='sm').classes('text-blue-600').style(f"transform: rotate({state['azimuth']}deg); transition: transform 0.1s;")
         
         ui.label('AZIMUTH').classes('text-[10px] font-bold text-gray-800')
         
         def on_slider_change(e):
-            # Safely apply the CSS rotation dynamically
             compass_icon.style(f'transform: rotate({e.value}deg);')
-            
             if len(state['boundary']) >= 3:
                 generate_coverage_path(show_warning=False)
                 
         ui.slider(min=0, max=180, step=1, value=0, on_change=on_slider_change).bind_value_to(state, 'azimuth').classes('flex-1')
         ui.label().bind_text_from(state, 'azimuth', backward=lambda v: f"{int(v)}°").classes('text-sm font-mono font-bold text-blue-600 w-10 text-right')
+
     # ==========================================
     # RIGHT SIDE SPEED SLIDER
     # ==========================================
@@ -304,10 +305,6 @@ async def main_page():
             
         poly = Polygon([pt['coords'] for pt in state['boundary']])
         centroid = poly.centroid
-        
-        # MATH CORRECTION: Azimuth to geometric Math Angle. 
-        # Standard maps: 0° is North (Azimuth). Math geometry: 0° is East.
-        # Transformation: Math Angle = 90 - Azimuth
         angle_math = 90 - state['azimuth']
         
         rotated_poly = rotate(poly, -angle_math, origin=centroid)
@@ -364,7 +361,6 @@ async def main_page():
         best_variant = None
         min_dist = float('inf')
         for v in variants:
-            # Re-rotate the start point of this variant back to real-world coordinates to check distance
             first_pt = rotate(Point(v[0]), angle_math, origin=centroid)
             dx = first_pt.x - state['lng']
             dy = first_pt.y - state['lat']
@@ -448,7 +444,8 @@ async def main_page():
                         lng_label.set_text(f"Lon: {state['lng']:.5f}")
                         lat_label.set_text(f"Lat: {state['lat']:.5f}")
                         alt_msl_label.set_text(f"MSL: {state['alt_msl']:.1f}m")
-                        ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']});")
+                        # UPDATED WITH UAV_SIZE
+                        ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']}, {state['uav_size']});")
                     elif state['click_mode'] == 'Boundary':
                         state['boundary'].append({'coords': pt, 'action': state['current_action']})
                         update_boundary_display()
@@ -495,9 +492,10 @@ async def main_page():
         lng_label.set_text(f"Lon: {state['lng']:.5f}")
         lat_label.set_text(f"Lat: {state['lat']:.5f}")
         alt_msl_label.set_text(f"MSL: {state['alt_msl']:.1f}m")
-        ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']});")
+        # UPDATED WITH UAV_SIZE
+        ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']}, {state['uav_size']});")
 
     ui.timer(0.1, poll_waypoints)
     ui.timer(0.1, flight_controller)
 
-ui.run(host='0.0.0.0', port=8091, title="UAV Mission Planner")
+ui.run(host='0.0.0.0', port=8091, title="intelligent path planer - IPP")
