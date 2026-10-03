@@ -36,9 +36,11 @@ state = {
     'spacing_m': 30,
     'agl_m': 30,       
     'current_action': 'None',
-    'dsms': [],
-    'dtms': [],
-    'orthos': []
+    'sources': [],
+    'map_servers': [
+        {'id': 'osm', 'name': 'OpenStreetMap Base', 'url': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', 'type': 'raster', 'active': True},
+        {'id': 'terrainSource', 'name': 'Mapzen Terrarium 3D', 'url': 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png', 'type': 'raster-dem', 'active': True}
+    ]
 }
 
 ui.add_head_html(f'''
@@ -51,6 +53,9 @@ ui.add_head_html(f'''
     <script>window.MAP_CONFIG = {{ lng: {CENTER_LNG}, lat: {CENTER_LAT}, alt: {state['alt_msl']} }};</script>
     <script src="/static/map.js?t={time.time()}" defer></script>
 ''', shared=True)
+
+def send_servers_to_map():
+    ui.run_javascript(f"window.syncServers({json.dumps(state['map_servers'])});")
 
 @ui.page('/')
 async def main_page():
@@ -73,7 +78,8 @@ async def main_page():
 
     with ui.dialog() as dlg_area, ui.card().classes('w-80'):
         ui.label('Area & Path').classes('text-lg font-bold')
-        ui.radio(['Boundary', 'Waypoints'], value='Boundary').bind_value_to(state, 'click_mode').classes('flex flex-row gap-4')
+        # NEW: Added "Set Start" to the map click actions
+        ui.radio(['Boundary', 'Waypoints', 'Set Start'], value='Boundary').bind_value_to(state, 'click_mode').classes('flex flex-row gap-4')
         ui.select(['None', 'Take Photo', 'Start Video', 'Stop Video', 'Hover 5s'], value='None', label='Action for next point').bind_value_to(state, 'current_action').classes('w-full mt-2')
         ui.select(['Lawnmower', 'Grid'], value='Lawnmower', label='Coverage Pattern').bind_value_to(state, 'pattern').classes('w-full mt-2')
         ui.button('Compute Path', on_click=lambda: generate_coverage_path()).classes('bg-blue-600 text-white w-full mt-4')
@@ -96,13 +102,63 @@ async def main_page():
             
             with open(path, 'wb') as f: f.write(data)
             cat = upload_type.value
-            if cat == 'DSM': state['dsms'].append(path)
-            elif cat == 'DTM': state['dtms'].append(path)
-            elif cat == 'Orthomosaic': state['orthos'].append(path)
+            
+            state['sources'].append({'name': file_name, 'path': path, 'type': cat, 'active': True})
             ui.notify(f'Loaded {cat}: {file_name}', type='positive')
 
         ui.upload(multiple=True, on_upload=handle_upload).classes('w-full mt-2')
         ui.button('Close', on_click=dlg_upload.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
+
+    with ui.dialog() as dlg_sources, ui.card().classes('w-96'):
+        ui.label('Local Data Sources').classes('text-lg font-bold')
+        sources_container = ui.column().classes('w-full mt-2')
+        
+        def refresh_sources_list():
+            sources_container.clear()
+            with sources_container:
+                if not state['sources']: ui.label('No files uploaded yet.').classes('text-sm text-gray-400 italic')
+                else:
+                    for src in state['sources']:
+                        with ui.row().classes('w-full items-center justify-between border-b pb-1 mb-1'):
+                            ui.checkbox(src['name'], value=src['active']).bind_value_to(src, 'active').classes('text-sm truncate w-48')
+                            color = 'blue' if src['type'] == 'DSM' else 'green' if src['type'] == 'DTM' else 'orange'
+                            ui.badge(src['type'], color=color)
+
+        ui.button('Close', on_click=dlg_sources.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
+
+    with ui.dialog() as dlg_servers, ui.card().classes('w-96 max-h-[80vh] overflow-y-auto'):
+        ui.label('Online Map Servers').classes('text-lg font-bold')
+        
+        server_list = ui.column().classes('w-full mt-2')
+        
+        def update_server_state(server_dict, is_active):
+            server_dict['active'] = is_active
+            send_servers_to_map()
+
+        def refresh_servers():
+            server_list.clear()
+            with server_list:
+                for s in state['map_servers']:
+                    with ui.row().classes('w-full items-center justify-between border-b pb-1 mb-1'):
+                        ui.checkbox(s['name'], value=s['active'], on_change=lambda e, s=s: update_server_state(s, e.value)).classes('text-sm truncate w-48')
+                        ui.badge('Terrain' if s['type'] == 'raster-dem' else 'Basemap', color='purple' if s['type'] == 'raster-dem' else 'blue')
+
+        with ui.expansion('Add Custom Server', icon='add').classes('w-full mt-2 border rounded'):
+            new_name = ui.input('Server Name', placeholder='e.g. Satellite Imagery').classes('w-full')
+            new_url = ui.input('Tile URL (XYZ)', placeholder='https://.../{z}/{x}/{y}.png').classes('w-full')
+            new_type = ui.select(['raster', 'raster-dem'], value='raster', label='Type').classes('w-full mt-2')
+            
+            def add_server():
+                if new_name.value and new_url.value:
+                    new_id = new_name.value.lower().replace(' ', '-')
+                    state['map_servers'].append({'id': new_id, 'name': new_name.value, 'url': new_url.value, 'type': new_type.value, 'active': True})
+                    refresh_servers()
+                    send_servers_to_map()
+                    new_name.value = ""
+                    new_url.value = ""
+            ui.button('Add Server', on_click=add_server).classes('mt-2 bg-blue-600 text-white w-full')
+
+        ui.button('Close', on_click=dlg_servers.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
     with ui.dialog() as dlg_export, ui.card().classes('w-80'):
         ui.label('Export Mission').classes('text-lg font-bold')
@@ -118,6 +174,8 @@ async def main_page():
         with ui.button(icon='flight_takeoff', on_click=dlg_flight.open).props('flat round'): ui.tooltip('Flight Parameters')
         with ui.button(icon='polyline', on_click=dlg_area.open).props('flat round'): ui.tooltip('Area Definition & Path')
         with ui.button(icon='upload_file', on_click=dlg_upload.open).props('flat round'): ui.tooltip('Upload DSM/DTM/Ortho')
+        with ui.button(icon='layers', on_click=lambda: (refresh_sources_list(), dlg_sources.open())).props('flat round'): ui.tooltip('Manage Local Sources')
+        with ui.button(icon='public', on_click=lambda: (refresh_servers(), dlg_servers.open())).props('flat round'): ui.tooltip('Online Map Servers')
         with ui.button(icon='download', on_click=dlg_export.open).props('flat round'): ui.tooltip('Export Mission Data')
         with ui.button(icon='help_outline', on_click=dlg_help.open).props('flat round text-blue'): ui.tooltip('Help & Instructions')
         ui.separator().props('vertical').classes('mx-2')
@@ -150,6 +208,7 @@ async def main_page():
 
     await ui.context.client.connected()
     ui.run_javascript('if (typeof window.initMap === "function") window.initMap();')
+    send_servers_to_map()
 
     # ==========================================
     # EXPORT LOGIC
@@ -208,10 +267,10 @@ async def main_page():
                         for val in src.sample([(x, y)]): return float(val[0])
                     except Exception: pass
         elif HAS_GEO:
-            for file_list in [state['dsms'], state['dtms']]:
-                for path in file_list:
+            for cat in ['DSM', 'DTM']:
+                for src_item in [s for s in state['sources'] if s['active'] and s['type'] == cat]:
                     try:
-                        with rasterio.open(path) as src:
+                        with rasterio.open(src_item['path']) as src:
                             transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
                             x, y = transformer.transform(lng, lat)
                             if src.bounds.left <= x <= src.bounds.right and src.bounds.bottom <= y <= src.bounds.top:
@@ -264,9 +323,9 @@ async def main_page():
             
         open_rasters = []
         if HAS_GEO:
-            for path in state['dsms'] + state['dtms']:
+            for src_item in [s for s in state['sources'] if s['active'] and s['type'] in ['DSM', 'DTM']]:
                 try:
-                    src = rasterio.open(path)
+                    src = rasterio.open(src_item['path'])
                     transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
                     open_rasters.append((src, transformer))
                 except Exception: pass
@@ -294,6 +353,7 @@ async def main_page():
         state['route'] = new_route_3d
         state['target_idx'] = 0
         update_path_display()
+        dlg_area.close()
 
     def update_boundary_display():
         features = []
@@ -307,7 +367,6 @@ async def main_page():
             for i, pt in enumerate(state['boundary']):
                 features.append({'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': pt['coords']}, 'properties': {'label': str(i + 1)}})
         
-        print(f"--> PYTHON SENDING BOUNDARY (Points: {len(state['boundary'])})")
         ui.run_javascript(f"window.updateBoundary({json.dumps({'type': 'FeatureCollection', 'features': features})});")
 
     def update_path_display():
@@ -326,8 +385,17 @@ async def main_page():
             new_clicks = await ui.run_javascript(js_code)
             if new_clicks:
                 for pt in new_clicks:
-                    print(f"--> PYTHON RECEIVED CLICK: {pt}") 
-                    if state['click_mode'] == 'Boundary':
+                    # NEW: Added "Set Start" logic
+                    if state['click_mode'] == 'Set Start':
+                        state['lng'], state['lat'] = pt[0], pt[1]
+                        state['alt_msl'] = get_elevation(pt[0], pt[1]) + state['agl_m']
+                        
+                        lng_label.set_text(f"Lon: {state['lng']:.5f}")
+                        lat_label.set_text(f"Lat: {state['lat']:.5f}")
+                        alt_msl_label.set_text(f"MSL: {state['alt_msl']:.1f}m")
+                        ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']});")
+                        
+                    elif state['click_mode'] == 'Boundary':
                         state['boundary'].append({'coords': pt, 'action': state['current_action']})
                         update_boundary_display()
                     else:
@@ -335,7 +403,7 @@ async def main_page():
                         state['route'].append({'coords': pt_3d, 'action': state['current_action']})
                         update_path_display()
         except Exception as e:
-            print(f"--> PYTHON SILENT ERROR CAUGHT: {e}") 
+            pass
 
     def flight_controller():
         if not state['running'] or not state['route']: return
@@ -378,4 +446,5 @@ async def main_page():
     ui.timer(0.1, poll_waypoints)
     ui.timer(0.1, flight_controller)
 
-ui.run(host='0.0.0.0', port=8080, title="UAV Mission Planner")
+# PORT UPDATED TO 8091
+ui.run(host='0.0.0.0', port=8091, title="UAV Mission Planner")
