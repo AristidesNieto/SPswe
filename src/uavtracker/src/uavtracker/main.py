@@ -1,5 +1,4 @@
 from nicegui import ui, app
-# NEW: Added Point and rotate for orientation control
 from shapely.geometry import Polygon, LineString, Point
 from shapely.affinity import rotate
 import math
@@ -36,7 +35,7 @@ state = {
     'pattern': 'Lawnmower',
     'spacing_m': 30,
     'agl_m': 30,       
-    'angle_deg': 0, # NEW: Tracker for the rotation angle slider
+    'angle_deg': 0, 
     'current_action': 'None',
     'sources': [],
     'map_servers': [
@@ -83,12 +82,7 @@ async def main_page():
         ui.radio(['Boundary', 'Waypoints', 'Set Start'], value='Boundary').bind_value_to(state, 'click_mode').classes('flex flex-row gap-4')
         ui.select(['None', 'Take Photo', 'Start Video', 'Stop Video', 'Hover 5s'], value='None', label='Action for next point').bind_value_to(state, 'current_action').classes('w-full mt-2')
         ui.select(['Lawnmower', 'Grid'], value='Lawnmower', label='Coverage Pattern').bind_value_to(state, 'pattern').classes('w-full mt-2')
-        
-        # NEW: Horizontal slider for Path Orientation
-        ui.label('Pattern Orientation (Degrees)').classes('text-xs text-gray-500 mt-2')
-        ui.slider(min=0, max=180, value=0).bind_value_to(state, 'angle_deg').classes('w-full')
-        
-        ui.button('Compute Path', on_click=lambda: generate_coverage_path()).classes('bg-blue-600 text-white w-full mt-4')
+        ui.button('Compute Path', on_click=lambda: generate_coverage_path(show_warning=True)).classes('bg-blue-600 text-white w-full mt-4')
         ui.button('Clear Map', on_click=lambda: clear_all()).classes('bg-red-600 text-white w-full mt-2')
         ui.button('Close', on_click=dlg_area.close).classes('w-full mt-2 bg-gray-200 text-gray-800')
 
@@ -204,6 +198,21 @@ async def main_page():
         wp_label = ui.label('Waypoints: 0').classes('font-mono text-xs text-gray-600 font-bold mt-1')
 
     # ==========================================
+    # BOTTOM CENTER AZIMUTH / HEADING SLIDER
+    # ==========================================
+    with ui.card().classes('absolute bottom-8 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 flex flex-row items-center p-2 w-96 gap-4'):
+        ui.icon('explore', size='sm').classes('text-gray-600')
+        ui.label('AZIMUTH').classes('text-[10px] font-bold text-gray-800')
+        
+        # When slider changes, instantly recalculate the path if boundary is present
+        def on_slider_change(e):
+            if len(state['boundary']) >= 3:
+                generate_coverage_path(show_warning=False)
+                
+        ui.slider(min=0, max=180, step=1, value=0, on_change=on_slider_change).bind_value_to(state, 'angle_deg').classes('flex-1')
+        ui.label().bind_text_from(state, 'angle_deg', backward=lambda v: f"{int(v)}°").classes('text-sm font-mono font-bold text-blue-600 w-10 text-right')
+
+    # ==========================================
     # RIGHT SIDE SPEED SLIDER
     # ==========================================
     with ui.card().classes('absolute top-1/2 right-4 -translate-y-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 flex flex-col items-center p-2 w-16'):
@@ -284,15 +293,15 @@ async def main_page():
         dist = math.sqrt((lng - CENTER_LNG)**2 + (lat - CENTER_LAT)**2)
         return 530.0 + (100.0 * math.exp(-(dist**2) / 0.00005))
 
-    def generate_coverage_path():
+    def generate_coverage_path(show_warning=True):
         if len(state['boundary']) < 3:
-            ui.notify('Please draw a boundary with at least 3 points first.', type='warning')
+            if show_warning:
+                ui.notify('Please draw a boundary with at least 3 points first.', type='warning')
             return
             
         poly = Polygon([pt['coords'] for pt in state['boundary']])
         centroid = poly.centroid
         
-        # Rotate the polygon to respect the orientation angle slider
         rotated_poly = rotate(poly, -state['angle_deg'], origin=centroid)
         minx, miny, maxx, maxy = rotated_poly.bounds
         
@@ -334,7 +343,6 @@ async def main_page():
                 append(is_vertical=True)
             return coords_list
 
-        # Evaluate the 4 possible starting corners of the route
         variants = [
             generate_2d_variant(start_left=True, reverse_sweeps=False),
             generate_2d_variant(start_left=False, reverse_sweeps=False),
@@ -345,11 +353,9 @@ async def main_page():
         variants = [v for v in variants if len(v) > 0]
         if not variants: return
         
-        # Pick the variant where the very first point is closest to the UAV's current position
         best_variant = None
         min_dist = float('inf')
         for v in variants:
-            # Must temporarily rotate the start point back to reality to check the true distance
             first_pt = rotate(Point(v[0]), state['angle_deg'], origin=centroid)
             dx = first_pt.x - state['lng']
             dy = first_pt.y - state['lat']
@@ -358,7 +364,6 @@ async def main_page():
                 min_dist = dist
                 best_variant = v
                 
-        # Now permanently rotate all points in the winning route back to world space
         raw_waypoints_2d = []
         for pt in best_variant:
             rot_pt = rotate(Point(pt), state['angle_deg'], origin=centroid)
@@ -396,7 +401,7 @@ async def main_page():
         state['route'] = new_route_3d
         state['target_idx'] = 0
         update_path_display()
-        dlg_area.close()
+        if show_warning: dlg_area.close() # Only close dialog if manually clicked
 
     def update_boundary_display():
         features = []
