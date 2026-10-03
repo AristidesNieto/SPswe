@@ -1,5 +1,5 @@
 [project]
-name = "uavtracker"
+name = "ipp_planner"
 version = "0.0.2"
 description = "Simple UAV path planing tool GEN-AI made"
 readme = "README.md"
@@ -8,15 +8,19 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.142.2",
     "nicegui>=3.17.1",
+    "pydantic>=2.13.5",
     "pyproj>=3.8.0",
     "rasterio>=1.5.2",
+    "rio-tiler>=9.4.9",
     "shapely>=2.1.2",
     "simplekml>=1.3.6",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
-uavtracker = "uavtracker:main"
+ipp_planner = "ipp_planner:main"
 
 [build-system]
 requires = ["uv_build>=0.12.6,<0.13.0"]

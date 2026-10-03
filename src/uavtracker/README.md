@@ -544,3 +544,66 @@ graph TB
 | **4. Multi-Path** | Implement `fitBounds` path focus utility | Low | MapLibre GL JS | One-click camera zoom to selected route bounding boxes |
 | **5. Persistence** | Build SQLite database repository with Pydantic validation | Low | `sqlite3`, `pydantic` | Fully ACID-compliant persistent local route catalog |
 | **5. Persistence** | Implement FastAPI endpoints (`/api/v1/routes/*`) | Medium | `fastapi` | RESTful API documentation, listing, query, and execution routes |
+
+Here is the complete, ready-to-run package containing the final frontend and backend files, along with the installation instructions your developer needs to deploy this on Windows or Linux.
+
+### 1. Environment & Installation Setup
+
+To run this application and prepare for the upcoming ROS 2 integration, the developer will need **Python 3.10+**.
+
+Create a `requirements.txt` file with the following libraries:
+
+```text
+nicegui>=1.4.0
+fastapi
+uvicorn
+shapely
+rasterio
+pyproj
+simplekml
+rio-tiler
+pydantic
+
+```
+
+# Installation Notes
+
+## Environment & Installation Setup (Using `uv`)
+
+### 1. Create a ROS-Compatible Virtual Environment:
+ROS 2 requires access to system-level libraries. Initialize a virtual environment requesting Python 3.12 or higher with system site-packages enabled:
+```bash
+uv venv --python ">=3.12" --system-site-packages
+```
+### Activate the Environment:
+* **Windows:** `.venv\Scripts\activate`
+* **Linux:** `source .venv/bin/activate`
+
+
+### Install Dependencies:
+Use `uv add` to automatically resolve, fetch, and add the required packages to your project (this manages your `pyproject.toml` and lockfile directly):
+```bash
+uv add nicegui fastapi uvicorn shapely rasterio pyproj simplekml rio-tiler pydantic
+```
+### Source ROS 2:
+The host machine must have a native ROS 2 distribution installed. Source this environment so the Python script can locate the middleware:
+* **Windows:** `call C:\dev\ros2\local_setup.bat` (or your specific ROS path)
+* **Linux:** `source /opt/ros/humble/setup.bash`
+
+### Folder Structure Setup
+Ensure your directory contains the scripts and the exact logo file:
+
+```text
+/ipp_planner/
+├── main.py
+├── map.js
+└── ISF_Instituts_Visual_EN_Zeichenfläche 1.png
+
+```
+
+
+6. **Launch the Platform:**
+```bash
+uv run main.py
+
+```
