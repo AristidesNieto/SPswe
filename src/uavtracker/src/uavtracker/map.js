@@ -52,7 +52,7 @@ window.initMap = function () {
 
         // --- UAV Shadow & Marker ---
         window.mapInstance.addSource('uav-shadow', { 'type': 'geojson', 'data': { 'type': 'Point', 'coordinates': [window.MAP_CONFIG.lng, window.MAP_CONFIG.lat] } });
-        window.mapInstance.addLayer({ 'id': 'uav-shadow-layer', 'type': 'circle', 'source': 'uav-shadow', 'paint': { 'circle-radius': 8, 'circle-color': '#000', 'circle-blur': 0.8, 'circle-opacity': 0.5 } });
+        window.mapInstance.addLayer({ 'id': 'uav-shadow-layer', 'type': 'circle', 'source': 'uav-shadow', 'paint': { 'circle-radius': 12, 'circle-color': '#000', 'circle-blur': 0.8, 'circle-opacity': 0.5 } });
 
         window.mapInstance.addSource('uav-marker', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
         window.mapInstance.addLayer({
@@ -75,7 +75,6 @@ window.initMap = function () {
     });
 };
 
-// NEW: Dynamically loads, hides, and switches raster/terrain servers
 window.syncServers = function (servers) {
     if (!window.mapInstance || !window.mapInstance.isStyleLoaded()) {
         setTimeout(() => window.syncServers(servers), 500);
@@ -89,7 +88,6 @@ window.syncServers = function (servers) {
         const layerId = (server.id === 'osm') ? 'osm' : server.id + '-layer';
 
         if (server.active) {
-            // If source doesn't exist, inject it dynamically
             if (!window.mapInstance.getSource(sourceId)) {
                 window.mapInstance.addSource(sourceId, {
                     'type': server.type,
@@ -99,7 +97,6 @@ window.syncServers = function (servers) {
                 });
 
                 if (server.type === 'raster') {
-                    // Place new map layers below the drawn boundary and flight path
                     window.mapInstance.addLayer({
                         'id': layerId,
                         'type': 'raster',
@@ -108,28 +105,18 @@ window.syncServers = function (servers) {
                     }, 'boundary-fill');
                 }
             } else if (server.type === 'raster' && window.mapInstance.getLayer(layerId)) {
-                // If it exists, just ensure it's visible
                 window.mapInstance.setLayoutProperty(layerId, 'visibility', 'visible');
             }
-
-            // Track the active 3D elevation model
-            if (server.type === 'raster-dem') {
-                activeDem = sourceId;
-            }
+            if (server.type === 'raster-dem') activeDem = sourceId;
         } else {
-            // Turn off the layer if user disabled it
             if (server.type === 'raster' && window.mapInstance.getLayer(layerId)) {
                 window.mapInstance.setLayoutProperty(layerId, 'visibility', 'none');
             }
         }
     });
 
-    // Toggle 3D mesh based on active setting
-    if (activeDem) {
-        window.mapInstance.setTerrain({ 'source': activeDem, 'exaggeration': 1.5 });
-    } else {
-        window.mapInstance.setTerrain(null);
-    }
+    if (activeDem) window.mapInstance.setTerrain({ 'source': activeDem, 'exaggeration': 1.5 });
+    else window.mapInstance.setTerrain(null);
 };
 
 window.updateUAV = function (lng, lat, alt_msl, agl) {
@@ -137,8 +124,10 @@ window.updateUAV = function (lng, lat, alt_msl, agl) {
     if (window.mapInstance) {
         if (window.mapInstance.getSource('uav-shadow')) window.mapInstance.getSource('uav-shadow').setData({ 'type': 'Point', 'coordinates': [lng, lat] });
         if (window.mapInstance.getSource('uav-marker')) {
-            const radiusDegLat = 3.0 / 111111.0;
-            const radiusDegLng = 3.0 / (111111.0 * Math.cos(lat * Math.PI / 180));
+            // INCREASED to 12 meters to make it highly visible and match track widths visually
+            const radiusMeters = 12.0;
+            const radiusDegLat = radiusMeters / 111111.0;
+            const radiusDegLng = radiusMeters / (111111.0 * Math.cos(lat * Math.PI / 180));
             const circleCoords = [];
             for (let i = 0; i < 32; i++) {
                 const theta = (i / 32) * (2 * Math.PI);

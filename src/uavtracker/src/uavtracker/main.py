@@ -1,11 +1,12 @@
 from nicegui import ui, app
-from shapely.geometry import Polygon, LineString
+# NEW: Added Point and rotate for orientation control
+from shapely.geometry import Polygon, LineString, Point
+from shapely.affinity import rotate
 import math
 import json
 import os
 import time
 
-# --- Geospatial imports ---
 try:
     import rasterio
     from pyproj import Transformer
@@ -35,6 +36,7 @@ state = {
     'pattern': 'Lawnmower',
     'spacing_m': 30,
     'agl_m': 30,       
+    'angle_deg': 0, # NEW: Tracker for the rotation angle slider
     'current_action': 'None',
     'sources': [],
     'map_servers': [
@@ -78,10 +80,14 @@ async def main_page():
 
     with ui.dialog() as dlg_area, ui.card().classes('w-80'):
         ui.label('Area & Path').classes('text-lg font-bold')
-        # NEW: Added "Set Start" to the map click actions
         ui.radio(['Boundary', 'Waypoints', 'Set Start'], value='Boundary').bind_value_to(state, 'click_mode').classes('flex flex-row gap-4')
         ui.select(['None', 'Take Photo', 'Start Video', 'Stop Video', 'Hover 5s'], value='None', label='Action for next point').bind_value_to(state, 'current_action').classes('w-full mt-2')
         ui.select(['Lawnmower', 'Grid'], value='Lawnmower', label='Coverage Pattern').bind_value_to(state, 'pattern').classes('w-full mt-2')
+        
+        # NEW: Horizontal slider for Path Orientation
+        ui.label('Pattern Orientation (Degrees)').classes('text-xs text-gray-500 mt-2')
+        ui.slider(min=0, max=180, value=0).bind_value_to(state, 'angle_deg').classes('w-full')
+        
         ui.button('Compute Path', on_click=lambda: generate_coverage_path()).classes('bg-blue-600 text-white w-full mt-4')
         ui.button('Clear Map', on_click=lambda: clear_all()).classes('bg-red-600 text-white w-full mt-2')
         ui.button('Close', on_click=dlg_area.close).classes('w-full mt-2 bg-gray-200 text-gray-800')
@@ -102,7 +108,6 @@ async def main_page():
             
             with open(path, 'wb') as f: f.write(data)
             cat = upload_type.value
-            
             state['sources'].append({'name': file_name, 'path': path, 'type': cat, 'active': True})
             ui.notify(f'Loaded {cat}: {file_name}', type='positive')
 
@@ -285,41 +290,79 @@ async def main_page():
             return
             
         poly = Polygon([pt['coords'] for pt in state['boundary']])
-        minx, miny, maxx, maxy = poly.bounds
+        centroid = poly.centroid
+        
+        # Rotate the polygon to respect the orientation angle slider
+        rotated_poly = rotate(poly, -state['angle_deg'], origin=centroid)
+        minx, miny, maxx, maxy = rotated_poly.bounds
+        
         spacing_deg_y = state['spacing_m'] / 111111.0
         spacing_deg_x = state['spacing_m'] / (111111.0 * math.cos(math.radians(CENTER_LAT)))
         
-        raw_waypoints_2d = []
-
-        def append_sweeps(is_vertical=False):
-            sweeps = []
-            if not is_vertical:
-                y = miny
-                while y <= maxy:
-                    sweeps.append(LineString([(minx - 0.01, y), (maxx + 0.01, y)]))
-                    y += spacing_deg_y
-            else:
-                x = minx
-                while x <= maxx:
-                    sweeps.append(LineString([(x, miny - 0.01), (x, maxy + 0.01)]))
-                    x += spacing_deg_x
+        def generate_2d_variant(start_left, reverse_sweeps):
+            coords_list = []
+            def append(is_vertical):
+                sweeps = []
+                if not is_vertical:
+                    y = miny
+                    while y <= maxy:
+                        sweeps.append(LineString([(minx - 0.01, y), (maxx + 0.01, y)]))
+                        y += spacing_deg_y
+                else:
+                    x = minx
+                    while x <= maxx:
+                        sweeps.append(LineString([(x, miny - 0.01), (x, maxy + 0.01)]))
+                        x += spacing_deg_x
+                
+                if reverse_sweeps: sweeps.reverse()
+                
+                left_to_right = start_left
+                for line in sweeps:
+                    intersection = rotated_poly.intersection(line)
+                    if intersection.is_empty: continue
+                    seg_coords = []
+                    if intersection.geom_type == 'LineString': seg_coords = list(intersection.coords)
+                    elif intersection.geom_type == 'MultiLineString':
+                        ixmin, iymin, ixmax, iymax = intersection.bounds
+                        seg_coords = [(ixmin, iymin), (ixmax, iymax)] if not is_vertical else [(ixmin, iymin), (ixmin, iymax)]
+                    if not left_to_right: seg_coords.reverse()
+                    coords_list.extend(seg_coords)
+                    left_to_right = not left_to_right
             
-            left_to_right = True
-            for line in sweeps:
-                intersection = poly.intersection(line)
-                if intersection.is_empty: continue
-                coords = []
-                if intersection.geom_type == 'LineString': coords = list(intersection.coords)
-                elif intersection.geom_type == 'MultiLineString':
-                    ixmin, iymin, ixmax, iymax = intersection.bounds
-                    coords = [(ixmin, iymin), (ixmax, iymax)] if not is_vertical else [(ixmin, iymin), (ixmin, iymax)]
-                if not left_to_right: coords.reverse()
-                raw_waypoints_2d.extend(coords)
-                left_to_right = not left_to_right
+            append(is_vertical=False)
+            if state['pattern'] == 'Grid':
+                append(is_vertical=True)
+            return coords_list
 
-        append_sweeps(is_vertical=False)
-        if state['pattern'] == 'Grid':
-            append_sweeps(is_vertical=True)
+        # Evaluate the 4 possible starting corners of the route
+        variants = [
+            generate_2d_variant(start_left=True, reverse_sweeps=False),
+            generate_2d_variant(start_left=False, reverse_sweeps=False),
+            generate_2d_variant(start_left=True, reverse_sweeps=True),
+            generate_2d_variant(start_left=False, reverse_sweeps=True)
+        ]
+        
+        variants = [v for v in variants if len(v) > 0]
+        if not variants: return
+        
+        # Pick the variant where the very first point is closest to the UAV's current position
+        best_variant = None
+        min_dist = float('inf')
+        for v in variants:
+            # Must temporarily rotate the start point back to reality to check the true distance
+            first_pt = rotate(Point(v[0]), state['angle_deg'], origin=centroid)
+            dx = first_pt.x - state['lng']
+            dy = first_pt.y - state['lat']
+            dist = dx*dx + dy*dy
+            if dist < min_dist:
+                min_dist = dist
+                best_variant = v
+                
+        # Now permanently rotate all points in the winning route back to world space
+        raw_waypoints_2d = []
+        for pt in best_variant:
+            rot_pt = rotate(Point(pt), state['angle_deg'], origin=centroid)
+            raw_waypoints_2d.append([rot_pt.x, rot_pt.y])
             
         open_rasters = []
         if HAS_GEO:
@@ -385,16 +428,13 @@ async def main_page():
             new_clicks = await ui.run_javascript(js_code)
             if new_clicks:
                 for pt in new_clicks:
-                    # NEW: Added "Set Start" logic
                     if state['click_mode'] == 'Set Start':
                         state['lng'], state['lat'] = pt[0], pt[1]
                         state['alt_msl'] = get_elevation(pt[0], pt[1]) + state['agl_m']
-                        
                         lng_label.set_text(f"Lon: {state['lng']:.5f}")
                         lat_label.set_text(f"Lat: {state['lat']:.5f}")
                         alt_msl_label.set_text(f"MSL: {state['alt_msl']:.1f}m")
                         ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']});")
-                        
                     elif state['click_mode'] == 'Boundary':
                         state['boundary'].append({'coords': pt, 'action': state['current_action']})
                         update_boundary_display()
@@ -446,5 +486,4 @@ async def main_page():
     ui.timer(0.1, poll_waypoints)
     ui.timer(0.1, flight_controller)
 
-# PORT UPDATED TO 8091
 ui.run(host='0.0.0.0', port=8091, title="UAV Mission Planner")
