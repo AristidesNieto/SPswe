@@ -41,7 +41,7 @@ window.initMap = function () {
         window.mapInstance.getCanvas().style.cursor = 'crosshair';
 
         try {
-            // --- Boundary Layers (Fixed filters) ---
+            // --- Boundary Layers ---
             window.mapInstance.addSource('boundary', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
             window.mapInstance.addLayer({ 'id': 'boundary-fill', 'type': 'fill', 'source': 'boundary', 'filter': ['==', '$type', 'Polygon'], 'paint': { 'fill-color': '#facc15', 'fill-opacity': 0.3 } });
             window.mapInstance.addLayer({ 'id': 'boundary-line', 'type': 'line', 'source': 'boundary', 'filter': ['any', ['==', '$type', 'Polygon'], ['==', '$type', 'LineString']], 'paint': { 'line-color': '#ca8a04', 'line-width': 2, 'line-dasharray': [2, 2] } });

@@ -517,4 +517,4 @@ async def main_page():
     ui.timer(0.1, poll_waypoints)
     ui.timer(0.1, flight_controller)
 
-ui.run(host='127.0.0.1', port=8091, title="intelligent path planer - IPP")
+ui.run(host='0.0.0.0', port=8091, title="intelligent path planer - IPP")
