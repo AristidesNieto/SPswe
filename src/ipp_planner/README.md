@@ -605,5 +605,84 @@ Ensure your directory contains the scripts and the exact logo file:
 6. **Launch the Platform:**
 ```bash
 uv run main.py
+```
+# GNSS - High Accuracy
+
+`MapLibre GL JS` operations inside the browser *always* use Web Mercator (EPSG:3857) to render the map tiles, and it translates those pixel positions back to a spherical projection of EPSG:4326 (WGS84) when you click on the map.
+
+This creates a precision ceiling: MapLibre has no concept of 3D ellipsoidal datum transformations or tectonic plate epochs (like ITRF2020). While this is fine for most applications, it can introduce sub-meter shifts if you try to use MapLibre's raw WGS84 outputs directly for precision RTK flight.
+
+To force the system to yield absolute, true-to-epoch ITRF2020/WGS84 coordinates, you must completely bypass MapLibre's frontend coordinate math and handle the transformation natively in Python using the Swiss coordinate system and `pyproj`.
+
+Here is exactly how to do it.
+
+### The Solution: True Datum Transformation via Python `pyproj`
+
+Instead of trusting the WGS84 (`e.lngLat`) that MapLibre calculates, we will intercept the raw Web Mercator click coordinates (`EPSG:3857`), send those to the Python backend, and use `pyproj` to perform a rigorous datum transformation into true ITRF2020 (which is virtually identical to WGS84(G2139)).
+
+Because you are using Swisstopo, the 3857 tiles are perfectly aligned to the Swiss national frame (CH1903+ / LV95).
+
+**1. Install `pyproj**`
+If you haven't already, add it via `uv`:
+
+```bash
+uv add pyproj
 
 ```
+
+**2. Python Backend Changes (`main.py`)**
+Update your Python backend to include a `Transformer` that forces the math into the high-precision ITRF2020 epoch.
+
+```python
+from pyproj import Transformer, CRS
+
+# Create a highly accurate transformer bypassing standard MapLibre Web Mercator logic
+# EPSG:3857 = Web Mercator (from MapLibre)
+# EPSG:9000 = ITRF2020 (Latest epoch of WGS84)
+try:
+    # If the pyproj grid shift files are installed, this performs a rigorous transform
+    transformer_to_itrf = Transformer.from_crs("EPSG:3857", "EPSG:9000", always_xy=True)
+except Exception:
+    # Fallback to standard EPSG:4326 if specific ITRF definitions are missing
+    transformer_to_itrf = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+
+# Example of how you intercept clicks in poll_waypoints():
+async def poll_waypoints():
+    js_code = 'if (window.waypointQueue && window.waypointQueue.length > 0) { let q = window.waypointQueue; window.waypointQueue = []; return q; } return [];'
+    try:
+        new_clicks = await ui.run_javascript(js_code)
+        if new_clicks:
+            for pt in new_clicks:
+                # pt[0] and pt[1] are now raw EPSG:3857 Web Mercator meters from the browser
+                true_lng, true_lat = transformer_to_itrf.transform(pt[0], pt[1])
+                
+                # Now use true_lng and true_lat for all flight planning...
+                state['lng'], state['lat'] = true_lng, true_lat
+                # ...
+
+```
+
+**3. Frontend Javascript Changes (`map.js`)**
+You must change MapLibre's `click` event so it sends the raw Web Mercator meters back to Python instead of its own calculated Long/Lat.
+
+Modify your `map.on('click')` handler in `map.js`:
+
+```javascript
+window.mapInstance.on('click', (e) => {
+    // DO NOT use e.lngLat.lng or e.lngLat.lat
+    // Instead, project the click down to raw EPSG:3857 Web Mercator meters
+    const point = window.mapInstance.project(e.lngLat);
+    const mercatorCoords = maplibregl.MercatorCoordinate.fromLngLat(e.lngLat);
+    
+    // Convert MapLibre's relative Mercator space (0 to 1) into true EPSG:3857 meters
+    const earthRadius = 6378137;
+    const x = (mercatorCoords.x - 0.5) * (2 * Math.PI * earthRadius);
+    const y = (0.5 - mercatorCoords.y) * (2 * Math.PI * earthRadius);
+    
+    window.waypointQueue.push([x, y]);
+});
+
+```
+
+By making these two changes, the browser acts only as a dumb terminal to send pixel locations. Your Python backend handles the rigorous, mathematically correct projection mapping from Swisstopo's accurate aerial imagery straight to the true ITRF2020 frame.
+**TO DO**: VERIFY, I am not sure if this is true.

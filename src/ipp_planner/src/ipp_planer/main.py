@@ -41,10 +41,11 @@ state = {
     'current_action': 'None',
     'sources': [],
     'map_servers': [
-        {'id': 'osm', 'name': 'OpenStreetMap Base', 'url': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', 'type': 'raster', 'active': True},
+        {'id': 'osm', 'name': 'OpenStreetMap Base', 'url': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', 'type': 'raster', 'active': False},
+        {'id': 'swisstopo', 'name': 'Swisstopo Aerial', 'url': 'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg', 'type': 'raster', 'active': True},
+        {'id': 'esri', 'name': 'Esri World Imagery', 'url': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'type': 'raster', 'active': False},
         {'id': 'terrainSource', 'name': 'Mapzen Terrarium 3D', 'url': 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png', 'type': 'raster-dem', 'active': True}
-    ]
-}
+    ]}
 
 ui.add_head_html(f'''
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
