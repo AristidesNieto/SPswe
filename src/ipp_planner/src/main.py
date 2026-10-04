@@ -446,9 +446,16 @@ async def main_page():
         ui.run_javascript(f"window.updatePath({json.dumps({'type': 'FeatureCollection', 'features': features})});")
 
     async def poll_waypoints():
+        # Skip polling if the browser tab isn't fully connected yet
+        if not ui.context.client.has_socket_connection:
+            return
+            
         js_code = 'if (window.waypointQueue && window.waypointQueue.length > 0) { let q = window.waypointQueue; window.waypointQueue = []; return q; } return [];'
+        
         try:
-            new_clicks = await ui.run_javascript(js_code)
+            # Execute JS and wait for the response
+            new_clicks = await ui.run_javascript(js_code, timeout=1.0)
+            # TODO: Reset timeout counter
             if new_clicks:
                 for pt in new_clicks:
                     if state['click_mode'] == 'Set Start':
@@ -466,10 +473,16 @@ async def main_page():
                         state['route'].append({'coords': pt_3d, 'action': state['current_action']})
                         check_and_close_route() 
                         update_path_display()
+                        
+        except TimeoutError:
+            # Client is busy or loading, silently skip this tick
+            # TODO: Implement a counter, display error if timeout takes to long
+            pass
         except Exception as e:
-            print("Python Polling Error:", e)
-            traceback.print_exc()
-
+            # Only print actual runtime crashes, ignore disconnection warnings
+            if "JavaScript did not respond" not in str(e):
+                print(f"Polling Error: {e}")
+    
     def flight_controller():
         if not state['running'] or not state['route']: return
             
