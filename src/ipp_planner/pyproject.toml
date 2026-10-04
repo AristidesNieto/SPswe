@@ -1,7 +1,7 @@
 [project]
 name = "ipp_planner"
-version = "0.0.7"
-description = "Simple UAV path planing tool GEN-AI made"
+version = "0.1.0"
+description = "Simple robot path planing and monitoring tool"
 readme = "README.md"
 authors = [
     { name = "Dejan Šeatović", email = "dejan.seatovic@ost.ch" }
