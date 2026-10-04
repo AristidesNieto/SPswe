@@ -799,3 +799,190 @@ def get_elevation(lng, lat, open_rasters=None):
 *(Note: Don't forget to run `uv pip install httpx` so the backend can make the API requests to Swisstopo).*
 
 By combining **swissALTI3D offline files** for precision and the **pyproj 3D transformer** for flight controller compatibility, your generated ROS 2 `mission_data` will feature sub-meter vertical accuracy out of the box.
+
+## Accurate Heights
+To achieve the highest possible precision in Switzerland, you must use Swisstopo's official grid files: **CHGeo2004** (for centimeter-accurate vertical geoid undulation) and **CHENyx06** (for precise planimetric shifts between the Swiss grid and WGS84/ITRF).
+
+The PROJ library (which powers `pyproj`) natively supports these official Swisstopo files. You do not need to parse custom files manually; you just need to download the official grid files into your local environment and configure your transformers to use them.
+
+### 1. Download the Swisstopo Grid Files
+
+Use the `pyproj` sync utility to pull the exact Swiss-wide geoid and position shift grids directly into your virtual environment.
+
+Run this in your terminal (with your `uv` environment activated):
+
+```bash
+uv run pyproj sync --file ch_swisstopo_CHGeo2004.tif
+uv run pyproj sync --file ch_swisstopo_CHENyx06.tif
+
+```
+
+### 2. Implement the High-Precision Transformers
+
+To utilize these files, we must change how the coordinates flow through the application.
+
+1. Convert the browser's Web Mercator click into the strict Swiss coordinate system (**LV95 / EPSG:2056**).
+2. Query your `swissALTI3D` files using that LV95 coordinate (since ALTI3D is distributed in LV95).
+3. Transform the LV95 position + ALTI3D height (LN02 / EPSG:5728) directly into **ITRF2020 3D (EPSG:9000)**. `pyproj` will automatically detect the presence of `CHGeo2004.tif` and `CHENyx06.tif` to perform the exact transformation.
+
+Update your `main.py` imports and elevation logic:
+
+```python
+import httpx
+import pyproj
+from pyproj import Transformer
+
+# Enable network fallback just in case local grid files are missing
+pyproj.network.set_network_enabled(True)
+
+# Transformer 1: Browser Web Mercator (3857) to Swiss LV95 (2056)
+transformer_web_to_lv95 = Transformer.from_crs("EPSG:3857", "EPSG:2056", always_xy=True)
+
+# Transformer 2: Swiss LV95 + LN02 Height -> ITRF2020 3D
+# This automatically applies CHENyx06 (for X,Y) and CHGeo2004 (for Z undulation)
+transformer_swiss_to_itrf = Transformer.from_crs(
+    "EPSG:2056+5728", # Input: Swiss LV95 (East, North) + LN02 (Height)
+    "EPSG:9000",      # Output: ITRF2020 3D (Lon, Lat, Ellipsoidal Height)
+    always_xy=True
+)
+
+def get_elevation_and_true_pos(mercator_x, mercator_y, open_rasters=None):
+    """
+    Takes raw Web Mercator coordinates from MapLibre, fetches exact ALTI3D height,
+    and returns absolute ITRF2020 3D coordinates using Swisstopo grid models.
+    """
+    # 1. Convert to Swiss LV95 for precise local queries
+    lv95_e, lv95_n = transformer_web_to_lv95.transform(mercator_x, mercator_y)
+    
+    ground_elevation_ln02 = None
+    
+    # 2. Query offline swissALTI3D (assuming they are uploaded in EPSG:2056)
+    if open_rasters is not None:
+        for src, _ in open_rasters:
+            # We skip the internal raster transformer if the TIF is already LV95
+            if src.bounds.left <= lv95_e <= src.bounds.right and src.bounds.bottom <= lv95_n <= src.bounds.top:
+                try:
+                    for val in src.sample([(lv95_e, lv95_n)]): 
+                        ground_elevation_ln02 = float(val[0])
+                        break
+                except Exception: 
+                    pass
+
+    # 3. Fallback to Swisstopo Live REST API
+    if ground_elevation_ln02 is None:
+        try:
+            # Query the API using LV95 coordinates (sr=2056)
+            response = httpx.get(
+                f"https://api3.geo.admin.ch/rest/services/height?easting={lv95_e}&northing={lv95_n}&sr=2056",
+                timeout=2.0
+            )
+            if response.status_code == 200:
+                ground_elevation_ln02 = float(response.json().get('height', 530.0))
+        except Exception as e:
+            print(f"Swisstopo API Error: {e}")
+            ground_elevation_ln02 = 530.0 # Winterthur emergency fallback
+
+    # 4. Apply CHGeo2004 and CHENyx06 to yield final UAV coordinates
+    true_lng, true_lat, ellipsoidal_height = transformer_swiss_to_itrf.transform(
+        lv95_e, 
+        lv95_n, 
+        ground_elevation_ln02
+    )
+    
+    return true_lng, true_lat, ellipsoidal_height
+
+```
+
+### 3. Update the Waypoint Poller
+
+Now that `get_elevation_and_true_pos` handles both position and height natively, update your click event listener in `poll_waypoints`:
+
+```python
+async def poll_waypoints():
+    js_code = 'if (window.waypointQueue && window.waypointQueue.length > 0) { let q = window.waypointQueue; window.waypointQueue = []; return q; } return [];'
+    try:
+        new_clicks = await ui.run_javascript(js_code)
+        if new_clicks:
+            for pt in new_clicks:
+                # pt[0] and pt[1] are Web Mercator meters from the browser
+                true_lng, true_lat, ground_ellipsoid = get_elevation_and_true_pos(pt[0], pt[1])
+                target_alt = ground_ellipsoid + state['agl_m']
+                
+                if state['click_mode'] == 'Set Start':
+                    state['lng'], state['lat'] = true_lng, true_lat
+                    state['alt_msl'] = target_alt
+                    # ... update UI labels ...
+                elif state['click_mode'] == 'Boundary':
+                    # ... append boundary ...
+                else:
+                    state['route'].append({'coords': [true_lng, true_lat, target_alt], 'action': state['current_action']})
+                    # ...
+
+```
+## ITRF2020 $\rightarrow$ CH 1903+ / LN02
+
+To transform live drone telemetry from Onocoy's ITRF2020 reference frame back into the local Swiss coordinate system (CH1903+ / LV95 for planimetry and LN02 for orthometric height), we apply the exact inverse of our previous transformation.
+
+Because you already synced `CHGeo2004.tif` and `CHENyx06.tif`, `pyproj` will seamlessly apply the sub-centimeter geoid undulation (subtracting the ~48m difference) and tectonic plate epoch shifts to yield true Swiss coordinates.
+
+Here is the implementation to parse the incoming ROS 2 RTK data.
+
+### The Reverse Pyproj Transformer
+
+In your `main.py`, define the inverse transformer alongside the others. `EPSG:9000` is the EPSG registry code for ITRF2020 3D.
+
+```python
+from pyproj import Transformer
+
+# Transformer: ITRF2020 3D -> Swiss LV95 (X, Y) + LN02 (Orthometric Height)
+transformer_itrf_to_swiss = Transformer.from_crs(
+    "EPSG:9000",      # Input: ITRF2020 3D (Lon, Lat, Ellipsoidal Height)
+    "EPSG:2056+5728", # Output: CH1903+/LV95 (East, North) + LN02 (Height)
+    always_xy=True
+)
+```
+
+### ROS 2 Telemetry Ingestion
+
+When your drone streams its GPS position via the `/nav_sat_fix` ROS 2 topic, intercept the ITRF2020 coordinates and transform them before storing them in your shared application state.
+
+Update the `_on_robot_pose` callback inside your `IPPRosNode` class:
+
+```python
+    def _on_robot_pose(self, robot_id: str, msg: NavSatFix):
+        # 1. Extract raw ITRF2020 RTK coordinates from the ROS message
+        itrf_lng = msg.longitude
+        itrf_lat = msg.latitude
+        itrf_ellipsoid_height = msg.altitude 
+        
+        # 2. Transform to true Swiss Local Coordinates
+        lv95_easting, lv95_northing, ln02_ortho_height = transformer_itrf_to_swiss.transform(
+            itrf_lng, 
+            itrf_lat, 
+            itrf_ellipsoid_height
+        )
+        
+        # 3. Store both coordinate systems in the shared thread state
+        with self.state_lock:
+            if robot_id not in self.shared_state['robot_telemetry']:
+                self.shared_state['robot_telemetry'][robot_id] = {}
+                
+            self.shared_state['robot_telemetry'][robot_id].update({
+                # Store native ITRF2020 for MapLibre rendering (EPSG:4326/3857 map engine)
+                'lat': itrf_lat,
+                'lng': itrf_lng,
+                'alt_ellipsoid': itrf_ellipsoid_height,
+                
+                # Store local Swiss coordinates for GIS export, local obstacle avoidance, or logging
+                'lv95_e': lv95_easting,
+                'lv95_n': lv95_northing,
+                'alt_ln02': ln02_ortho_height
+            })
+
+```
+
+### Handling Tectonic Epoch Drift (ITRF2020 Kinematics)
+
+Because ITRF2020 is a kinematic frame tied to the current epoch (e.g., 2026.x) and the Swiss LV95 frame is tied to a static historical epoch (1993.0), the Eurasian plate has drifted roughly 2.5 centimeters per year since 1993.
+
+When you specify `EPSG:9000` to `EPSG:2056`, modern versions of PROJ (using the Swisstopo grids you downloaded) automatically account for this intra-plate deformation and time-dependent shift. You do not need to manually apply Helmert 14-parameter transformations; the grid files handle the rigorous mathematics to align your drone's current-epoch RTK fix perfectly with static Swiss GIS data like `swissALTI3D`.
