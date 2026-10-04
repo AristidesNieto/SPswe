@@ -74,7 +74,7 @@ async def main_page():
         
         ui.label('Path Planning').classes('text-lg font-bold text-gray-800')
         ui.radio(['Boundary', 'Waypoints', 'Set Start'], value='Boundary').bind_value_to(state, 'click_mode').classes('flex flex-row gap-2 text-sm mt-1')
-        ui.select(['None', 'Take Photo', 'Start Video', 'Stop Video', 'Hover 5s'], value='None', label='Action for next point').bind_value_to(state, 'current_action').classes('w-full mt-2')
+        ui.select(['None', 'Take Photo', 'Start Video', 'Stop Video', 'Hover 5s', 'Treat Weed', 'Notify User', 'Take Soil Sample'], value='None', label='Action for next point').bind_value_to(state, 'current_action').classes('w-full mt-2')
         ui.select(['Lawnmower', 'Grid'], value='Lawnmower', label='Coverage Pattern').bind_value_to(state, 'pattern').classes('w-full mt-2')
         
         ui.button('Compute Path', on_click=lambda: generate_coverage_path()).classes('bg-blue-600 text-white w-full mt-4')
