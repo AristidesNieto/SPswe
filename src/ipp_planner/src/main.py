@@ -20,25 +20,18 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 app.add_static_files('/static', current_dir)
 
 CENTER_LNG, CENTER_LAT = 8.9056, 47.4795
-SPEED = 0.00001  
 
 state = {
     'lng': CENTER_LNG, 
     'lat': CENTER_LAT, 
-    'alt_msl': 530.0,
     'route': [], 
     'boundary': [], 
-    'target_idx': 0,
-    'direction': 1,
-    'running': False,
-    'speed_mult': 1.0, 
     'click_mode': 'Boundary', 
     'pattern': 'Lawnmower',
     'spacing_m': 30,
     'agl_m': 30,       
-    'uav_size': 3.0, 
     'azimuth': 0, 
-    'current_action': 'None',
+    'current_action': 'No action',
     'sources': [],
     'map_servers': [
         {'id': 'osm', 'name': 'OpenStreetMap Base', 'url': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', 'type': 'raster', 'active': False},
@@ -51,10 +44,10 @@ ui.add_head_html(f'''
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <style>
-        body {{ margin: 0; padding: 0; overflow: hidden; }}
+    body {{ margin: 0; padding: 0; overflow: hidden; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
         .maplibregl-canvas {{ cursor: crosshair !important; }}
     </style>
-    <script>window.MAP_CONFIG = {{ lng: {CENTER_LNG}, lat: {CENTER_LAT}, alt: {state['alt_msl']} }};</script>
+    <script>window.MAP_CONFIG = {{ lng: {CENTER_LNG}, lat: {CENTER_LAT} }};</script>
     <script src="/static/map.js?t={time.time()}" defer></script>
 ''', shared=True)
 
@@ -66,38 +59,75 @@ async def main_page():
     ui.query('.nicegui-content').classes('p-0')
     ui.element('div').props('id=map').classes('w-screen h-screen absolute top-0 left-0 z-0')
     
-    # ==========================================
-    # PERSISTENT PATH PLANNING PANEL (TOP LEFT)
-    # ==========================================
-    with ui.card().classes('absolute top-4 left-4 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 w-72 p-4'):
-        ui.image('/static/ISF_Instituts_Visual_EN_Zeichenfläche 1.png').classes('w-full h-auto mb-2')
-        
-        ui.label('Path Planning').classes('text-lg font-bold text-gray-800')
-        ui.radio(['Boundary', 'Waypoints', 'Set Start'], value='Boundary').bind_value_to(state, 'click_mode').classes('flex flex-row gap-2 text-sm mt-1')
-        ui.select(['None', 'Take Photo', 'Start Video', 'Stop Video', 'Hover 5s', 'Treat Weed', 'Notify User', 'Take Soil Sample'], value='None', label='Action for next point').bind_value_to(state, 'current_action').classes('w-full mt-2')
-        ui.select(['Lawnmower', 'Grid'], value='Lawnmower', label='Coverage Pattern').bind_value_to(state, 'pattern').classes('w-full mt-2')
-        
-        ui.button('Compute Path', on_click=lambda: generate_coverage_path()).classes('bg-blue-600 text-white w-full mt-4')
-        ui.button('Clear Map', on_click=lambda: clear_all()).classes('bg-red-600 text-white w-full mt-2')
+    with ui.card().classes('absolute top-4 left-4 right-4 z-50 bg-white/95 backdrop-blur shadow-lg border border-gray-200 rounded-2xl px-5 py-3'):
+        with ui.row().classes('w-full items-center justify-between no-wrap'):
+            with ui.row().classes('items-center gap-3 no-wrap'):
+                ui.icon('eco', size='md').classes('text-emerald-700')
+                with ui.column().classes('gap-0'):
+                    ui.label('Crop Health Monitor').classes('text-lg font-bold text-gray-900')
+                    ui.label('Crop health dashboard').classes('text-xs text-gray-500')
+            with ui.row().classes('items-center gap-2 no-wrap'):
+                ui.badge('PROTOTYPE · SAMPLE DATA').props('color=amber text-color=dark')
+                with ui.button(icon='layers', on_click=lambda: (refresh_servers(), dlg_servers.open())).props('flat round'):
+                    ui.tooltip('Change basemap')
+                with ui.button(icon='upload_file', on_click=lambda: dlg_upload.open()).props('flat round'):
+                    ui.tooltip('Upload geospatial data')
+                with ui.button(icon='folder_open', on_click=lambda: (refresh_sources_list(), dlg_sources.open())).props('flat round'):
+                    ui.tooltip('Manage local data sources')
+                with ui.button(icon='download', on_click=lambda: dlg_export.open()).props('flat round'):
+                    ui.tooltip('Export area and route')
+                with ui.button(icon='help_outline', on_click=lambda: dlg_help.open()).props('flat round text-emerald'):
+                    ui.tooltip('Help')
+
+    with ui.card().classes('absolute top-24 left-4 z-40 bg-white/95 backdrop-blur shadow-lg border border-gray-200 rounded-2xl w-80 max-w-[calc(100vw-2rem)] max-h-[calc(100vh-7rem)] overflow-y-auto p-4'):
+        with ui.row().classes('w-full items-center justify-between'):
+            ui.label('Intervention plan').classes('text-base font-bold text-gray-900')
+            ui.icon('route').classes('text-emerald-700')
+        ui.label('Mark the field boundary on the map to plan an inspection or removal route.').classes('text-xs leading-5 text-gray-500')
+        ui.radio(
+            {'Boundary': 'Draw field boundary', 'Waypoints': 'Add points'},
+            value='Boundary',
+        ).bind_value_to(state, 'click_mode').props('inline').classes('w-full mt-2')
+        ui.select(
+            ['No action', 'Remove plant', 'Inspect plant', 'Collect sample'],
+            value='No action',
+            label='Intervention action',
+        ).bind_value_to(state, 'current_action').classes('w-full mt-2')
+        ui.select(
+            {'Lawnmower': 'Parallel passes', 'Grid': 'Grid'},
+            value='Lawnmower',
+            label='Route pattern',
+        ).bind_value_to(state, 'pattern').classes('w-full mt-2')
+        ui.number('Pass spacing (m)', value=30, min=2, max=500).bind_value_to(state, 'spacing_m').classes('w-full mt-2')
+        with ui.row().classes('w-full gap-2 mt-3'):
+            ui.button('Generate route', icon='route', on_click=lambda: generate_coverage_path()).classes('bg-emerald-700 text-white flex-1')
+            with ui.button(icon='delete_sweep', on_click=lambda: clear_all()).props('outline').classes('text-gray-600'):
+                ui.tooltip('Clear field and route')
+        wp_label = ui.label('Route points: 0').classes('text-xs font-semibold text-emerald-800 mt-3')
 
     # ==========================================
     # POPUP DIALOGS (Settings, Upload, Export)
     # ==========================================
     with ui.dialog() as dlg_help, ui.card().classes('w-96 max-h-[80vh] overflow-y-auto'):
-        ui.label('Mission Planner Guide').classes('text-xl font-bold text-blue-800')
-        ui.markdown("""**Navigation**\n* **Pan:** Click and drag the map.\n* **Zoom:** Scroll wheel.\n* **3D View:** Hold Right-Click and drag.""")
+        ui.label('Using the map').classes('text-xl font-bold text-emerald-800')
+        ui.markdown("""
+**Navigation**
+
+- **Pan:** drag the map.
+- **Zoom:** use the mouse wheel or map controls.
+
+**Intervention planning**
+
+- Select “Draw field boundary” and mark at least three points around the field.
+- Choose an action and generate a coverage route.
+
+The hotspots and figures shown are sample data for demonstration only.
+""")
         ui.button('Close', on_click=dlg_help.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
-    with ui.dialog() as dlg_flight, ui.card().classes('w-80'):
-        ui.label('Flight Parameters').classes('text-lg font-bold')
-        ui.number('Distance between lines (m)', value=30, min=2, max=500).bind_value_to(state, 'spacing_m').classes('w-full')
-        ui.number('Target AGL Height (m)', value=30, min=5, max=500).bind_value_to(state, 'agl_m').classes('w-full')
-        ui.number('UAV Size (m)', value=3.0, min=0.5, max=50.0).bind_value_to(state, 'uav_size').classes('w-full')
-        ui.button('Close', on_click=dlg_flight.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
-
     with ui.dialog() as dlg_upload, ui.card().classes('w-80'):
-        ui.label('Upload Geospatial Data').classes('text-lg font-bold')
-        upload_type = ui.select(['DSM', 'DTM', 'Orthomosaic'], value='DSM', label='Select Data Category').classes('w-full mt-2')
+        ui.label('Upload geospatial data').classes('text-lg font-bold')
+        upload_type = ui.select(['DSM', 'DTM', 'Orthomosaic'], value='DSM', label='Raster layer type').classes('w-full mt-2')
         
         async def handle_upload(e):
             if not HAS_GEO: return
@@ -118,7 +148,7 @@ async def main_page():
         ui.button('Close', on_click=dlg_upload.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
     with ui.dialog() as dlg_sources, ui.card().classes('w-96'):
-        ui.label('Local Data Sources').classes('text-lg font-bold')
+        ui.label('Local data sources').classes('text-lg font-bold')
         sources_container = ui.column().classes('w-full mt-2')
         
         def refresh_sources_list():
@@ -135,7 +165,7 @@ async def main_page():
         ui.button('Close', on_click=dlg_sources.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
     with ui.dialog() as dlg_servers, ui.card().classes('w-96 max-h-[80vh] overflow-y-auto'):
-        ui.label('Online Map Servers').classes('text-lg font-bold')
+        ui.label('Basemaps').classes('text-lg font-bold')
         server_list = ui.column().classes('w-full mt-2')
         
         def update_server_state(server_dict, is_active):
@@ -167,59 +197,82 @@ async def main_page():
         ui.button('Close', on_click=dlg_servers.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
     with ui.dialog() as dlg_export, ui.card().classes('w-80'):
-        ui.label('Export Mission').classes('text-lg font-bold')
+        ui.label('Export intervention plan').classes('text-lg font-bold')
         ui.button('Download GeoJSON', on_click=lambda: export_geojson()).classes('w-full mt-2 bg-gray-800 text-white')
         ui.button('Download KML', on_click=lambda: export_kml(kmz=False)).classes('w-full mt-2 bg-gray-800 text-white')
         ui.button('Download KMZ', on_click=lambda: export_kml(kmz=True)).classes('w-full mt-2 bg-gray-800 text-white')
         ui.button('Close', on_click=dlg_export.close).classes('w-full mt-4 bg-gray-200 text-gray-800')
 
-    # ==========================================
-    # FLOATING TOP TOOLBAR 
-    # ==========================================
-    with ui.row().classes('absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 rounded-full px-2 py-1 gap-2 items-center'):
-        with ui.button(icon='flight_takeoff', on_click=dlg_flight.open).props('flat round'): ui.tooltip('Flight Parameters')
-        with ui.button(icon='upload_file', on_click=dlg_upload.open).props('flat round'): ui.tooltip('Upload DSM/DTM/Ortho')
-        with ui.button(icon='layers', on_click=lambda: (refresh_sources_list(), dlg_sources.open())).props('flat round'): ui.tooltip('Manage Local Sources')
-        with ui.button(icon='public', on_click=lambda: (refresh_servers(), dlg_servers.open())).props('flat round'): ui.tooltip('Online Map Servers')
-        with ui.button(icon='download', on_click=dlg_export.open).props('flat round'): ui.tooltip('Export Mission Data')
-        with ui.button(icon='help_outline', on_click=dlg_help.open).props('flat round text-blue'): ui.tooltip('Help & Instructions')
-        ui.separator().props('vertical').classes('mx-2')
-        with ui.button(icon='play_arrow', on_click=lambda: state.update(running=True)).props('flat round text-green'): ui.tooltip('Start UAV Simulation')
-        with ui.button(icon='stop', on_click=lambda: state.update(running=False)).props('flat round text-red'): ui.tooltip('Stop UAV Simulation')
+    with ui.card().classes('absolute top-24 right-4 z-40 bg-white/95 backdrop-blur shadow-lg border border-gray-200 rounded-2xl w-72 max-w-[calc(100vw-2rem)] max-h-[calc(100vh-7rem)] overflow-y-auto p-4'):
+        with ui.row().classes('w-full items-center justify-between'):
+            with ui.column().classes('gap-0'):
+                ui.label('Field devices').classes('text-base font-bold text-gray-900')
+                ui.label('Portable units · sample data').classes('text-xs text-gray-500')
+            ui.icon('sensors').classes('text-emerald-700')
+        ui.label('Equipment farmers can carry into the field to record areas of concern.').classes('text-xs leading-5 text-gray-500 mt-2')
+        with ui.row().classes('w-full gap-2 mt-3'):
+            with ui.column().classes('flex-1 rounded-xl bg-emerald-50 p-3 gap-0'):
+                ui.label('1').classes('text-2xl font-bold text-emerald-700')
+                ui.label('connected').classes('text-[11px] text-emerald-900')
+            with ui.column().classes('flex-1 rounded-xl bg-gray-100 p-3 gap-0'):
+                ui.label('1').classes('text-2xl font-bold text-gray-600')
+                ui.label('offline').classes('text-[11px] text-gray-700')
+        with ui.column().classes('w-full gap-2 mt-3'):
+            with ui.row().classes('w-full items-center justify-between rounded-xl border border-gray-200 p-3'):
+                with ui.row().classes('items-center gap-3 no-wrap'):
+                    ui.icon('sensors').classes('text-emerald-700')
+                    with ui.column().classes('gap-0'):
+                        ui.label('Scout-01').classes('text-sm font-semibold text-gray-900')
+                        ui.label('Portable unit · North field').classes('text-[11px] text-gray-500')
+                ui.badge('Connected', color='green').props('rounded')
+            with ui.row().classes('w-full items-center justify-between rounded-xl border border-gray-200 p-3'):
+                with ui.row().classes('items-center gap-3 no-wrap'):
+                    ui.icon('sensors').classes('text-gray-400')
+                    with ui.column().classes('gap-0'):
+                        ui.label('Scout-02').classes('text-sm font-semibold text-gray-900')
+                        ui.label('Portable unit · East field').classes('text-[11px] text-gray-500')
+                ui.badge('Offline', color='grey').props('rounded')
+        ui.button('Add device', icon='add').props('outline disable').classes('w-full mt-3 text-emerald-800')
+        ui.label('Device registration and live connections are not implemented yet.').classes('text-[11px] leading-4 text-gray-400 mt-2')
+        ui.separator().classes('my-4')
+        ui.label('Crop overview').classes('text-base font-bold text-gray-900')
+        ui.label('Previous season · sample data').classes('text-xs text-gray-500')
+        with ui.row().classes('w-full gap-2 mt-3'):
+            with ui.column().classes('flex-1 rounded-xl bg-amber-50 p-3 gap-0'):
+                ui.label('3').classes('text-2xl font-bold text-amber-700')
+                ui.label('recorded hotspots').classes('text-[11px] text-amber-900')
+            with ui.column().classes('flex-1 rounded-xl bg-rose-50 p-3 gap-0'):
+                ui.label('18%').classes('text-2xl font-bold text-rose-700')
+                ui.label('area under observation').classes('text-[11px] text-rose-900')
+        ui.separator().classes('my-3')
+        ui.switch(
+            'Show historical hotspots',
+            value=True,
+            on_change=lambda e: ui.run_javascript(
+                f"window.setHistoricalHotspotsVisible({str(e.value).lower()});"
+            ),
+        ).classes('text-sm')
+        with ui.row().classes('w-full items-center gap-2 mt-3'):
+            ui.label('Lower').classes('text-[10px] text-gray-500')
+            ui.element('div').classes('h-2 flex-1 rounded-full').style(
+                'background: linear-gradient(90deg, #a3e635, #facc15, #fb923c, #dc2626);'
+            )
+            ui.label('Higher').classes('text-[10px] text-gray-500')
+        ui.label('Colored areas are illustrative and do not represent actual farm measurements.').classes('text-xs leading-5 text-gray-500 mt-2')
 
     # ==========================================
-    # BOTTOM LEFT TELEMETRY HUD
+    # BOTTOM MAP STATUS AND ROUTE ORIENTATION
     # ==========================================
-    with ui.card().classes('absolute bottom-8 left-4 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 w-64'):
-        ui.label('Live Telemetry').classes('text-sm font-bold text-gray-800')
-        lng_label = ui.label(f"Lon: {state['lng']:.5f}").classes('font-mono text-xs')
-        lat_label = ui.label(f"Lat: {state['lat']:.5f}").classes('font-mono text-xs')
-        alt_msl_label = ui.label(f"MSL: {state['alt_msl']:.1f}m").classes('font-mono text-xs text-blue-700 font-bold')
-        wp_label = ui.label('Waypoints: 0').classes('font-mono text-xs text-gray-600 font-bold mt-1')
-
-    # ==========================================
-    # BOTTOM CENTER AZIMUTH / HEADING SLIDER
-    # ==========================================
-    with ui.card().classes('absolute bottom-8 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 flex flex-row items-center p-2 w-96 gap-4'):
-        compass_icon = ui.icon('navigation', size='sm').classes('text-blue-600').style(f"transform: rotate({state['azimuth']}deg); transition: transform 0.1s;")
-        
-        ui.label('AZIMUTH').classes('text-[10px] font-bold text-gray-800')
-        
+    with ui.card().classes('absolute bottom-5 left-1/2 -translate-x-1/2 z-40 bg-white/95 backdrop-blur shadow-lg border border-gray-200 rounded-2xl flex flex-row items-center p-2 w-80 max-w-[calc(100vw-2rem)] gap-3'):
+        compass_icon = ui.icon('navigation', size='sm').classes('text-emerald-700').style(f"transform: rotate({state['azimuth']}deg); transition: transform 0.1s;")
+        ui.label('Route heading').classes('text-xs font-semibold text-gray-700')
         def on_slider_change(e):
             compass_icon.style(f'transform: rotate({e.value}deg);')
             if len(state['boundary']) >= 3:
                 generate_coverage_path(show_warning=False)
                 
         ui.slider(min=0, max=180, step=1, value=0, on_change=on_slider_change).bind_value_to(state, 'azimuth').classes('flex-1')
-        ui.label().bind_text_from(state, 'azimuth', backward=lambda v: f"{int(v)}°").classes('text-sm font-mono font-bold text-blue-600 w-10 text-right')
-
-    # ==========================================
-    # RIGHT SIDE SPEED SLIDER
-    # ==========================================
-    with ui.card().classes('absolute top-1/2 right-4 -translate-y-1/2 z-50 bg-white/90 backdrop-blur shadow-lg border border-gray-200 flex flex-col items-center p-2 w-16'):
-        ui.label('SPEED').classes('text-[10px] font-bold text-gray-800 text-center')
-        ui.slider(min=0.5, max=10.0, step=0.5, value=1.0).bind_value_to(state, 'speed_mult').props('vertical reverse').classes('h-40 my-2')
-        ui.label().bind_text_from(state, 'speed_mult', backward=lambda v: f"{v:.1f}x").classes('text-xs font-mono font-bold text-blue-600')
+        ui.label().bind_text_from(state, 'azimuth', backward=lambda v: f"{int(v)}°").classes('text-xs font-mono font-bold text-emerald-700 w-8 text-right')
 
     await ui.context.client.connected()
     ui.run_javascript('if (typeof window.initMap === "function") window.initMap();')
@@ -233,11 +286,11 @@ async def main_page():
         if state['boundary'] and len(state['boundary']) >= 3:
             coords = [pt['coords'] for pt in state['boundary']]
             coords.append(coords[0])
-            data['features'].append({"type": "Feature", "properties": {"name": "Area Boundary", "actions": [pt['action'] for pt in state['boundary']]}, "geometry": {"type": "Polygon", "coordinates": [coords]}})
+            data['features'].append({"type": "Feature", "properties": {"name": "Intervention area", "actions": [pt['action'] for pt in state['boundary']]}, "geometry": {"type": "Polygon", "coordinates": [coords]}})
         if state['route']:
             coords = [pt['coords'] for pt in state['route']]
-            data['features'].append({"type": "Feature", "properties": {"name": "Flight Path"}, "geometry": {"type": "LineString", "coordinates": coords}})
-        path = os.path.join(current_dir, 'mission.geojson')
+            data['features'].append({"type": "Feature", "properties": {"name": "Intervention route"}, "geometry": {"type": "LineString", "coordinates": coords}})
+        path = os.path.join(current_dir, 'intervencion.geojson')
         with open(path, 'w') as f: json.dump(data, f)
         ui.download(path)
 
@@ -247,16 +300,16 @@ async def main_page():
         if state['boundary'] and len(state['boundary']) >= 3:
             coords = [(pt['coords'][0], pt['coords'][1]) for pt in state['boundary']]
             coords.append(coords[0])
-            pol = kml.newpolygon(name="Area Boundary", outerboundaryis=coords)
+            pol = kml.newpolygon(name="Intervention area", outerboundaryis=coords)
             pol.style.polystyle.color = '4000ffff'
             pol.style.linestyle.color = 'ff00ffff' 
         if state['route']:
             coords = [(pt['coords'][0], pt['coords'][1], pt['coords'][2] if len(pt['coords'])>2 else 0) for pt in state['route']]
-            ls = kml.newlinestring(name="Flight Path", coords=coords)
+            ls = kml.newlinestring(name="Intervention route", coords=coords)
             ls.altitudemode = simplekml.AltitudeMode.absolute
             ls.style.linestyle.color = 'ffff0000'
             ls.style.linestyle.width = 3
-        filename = 'mission.kmz' if kmz else 'mission.kml'
+        filename = 'intervencion.kmz' if kmz else 'intervencion.kml'
         path = os.path.join(current_dir, filename)
         if kmz: kml.savekmz(path)
         else: kml.save(path)
@@ -268,8 +321,6 @@ async def main_page():
     def clear_all():
         state['route'].clear()
         state['boundary'].clear()
-        state['target_idx'] = 0
-        state['running'] = False
         update_path_display()
         update_boundary_display()
 
@@ -306,7 +357,7 @@ async def main_page():
     def generate_coverage_path(show_warning=True):
         if len(state['boundary']) < 3:
             if show_warning:
-                ui.notify('Please draw a boundary with at least 3 points first.', type='warning')
+                ui.notify('Mark at least three points to draw the field boundary.', type='warning')
             return
             
         poly = Polygon([pt['coords'] for pt in state['boundary']])
@@ -408,7 +459,6 @@ async def main_page():
         for src, _ in open_rasters: src.close()
             
         state['route'] = new_route_3d
-        state['target_idx'] = 0
         check_and_close_route() 
         update_path_display()
 
@@ -426,21 +476,27 @@ async def main_page():
         ui.run_javascript(f"window.updateBoundary({json.dumps({'type': 'FeatureCollection', 'features': features})});")
 
     def update_path_display():
-        wp_label.set_text(f"Waypoints: {len(state['route'])}")
+        wp_label.set_text(f"Route points: {len(state['route'])}")
         features = []
         if state['route']:
-            coords_2d = [[state['lng'], state['lat']]]
-            if state['direction'] == 1: 
-                coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][state['target_idx']:]])
-            else: 
-                coords_2d.extend([[p['coords'][0], p['coords'][1]] for p in state['route'][:state['target_idx']+1][::-1]])
-            features.append({'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': coords_2d}})
-            
-            for i, p in enumerate(state['route']):
+            start = state['route'][0]['coords']
+            end = state['route'][-1]['coords']
+            if len(state['route']) > 1:
                 features.append({
-                    'type': 'Feature', 
-                    'geometry': {'type': 'Point', 'coordinates': [p['coords'][0], p['coords'][1]]}, 
-                    'properties': {'label': str(i + 1)}
+                    'type': 'Feature',
+                    'geometry': {
+                        'type': 'LineString',
+                        'coordinates': [[p['coords'][0], p['coords'][1]] for p in state['route']],
+                    },
+                })
+            endpoints = [(start, 'Inicio')]
+            if start != end:
+                endpoints.append((end, 'Fin'))
+            for point, label in endpoints:
+                features.append({
+                    'type': 'Feature',
+                    'geometry': {'type': 'Point', 'coordinates': [point[0], point[1]]},
+                    'properties': {'label': label},
                 })
                 
         ui.run_javascript(f"window.updatePath({json.dumps({'type': 'FeatureCollection', 'features': features})});")
@@ -458,14 +514,7 @@ async def main_page():
             # TODO: Reset timeout counter
             if new_clicks:
                 for pt in new_clicks:
-                    if state['click_mode'] == 'Set Start':
-                        state['lng'], state['lat'] = pt[0], pt[1]
-                        state['alt_msl'] = get_elevation(pt[0], pt[1]) + state['agl_m']
-                        lng_label.set_text(f"Lon: {state['lng']:.5f}")
-                        lat_label.set_text(f"Lat: {state['lat']:.5f}")
-                        alt_msl_label.set_text(f"MSL: {state['alt_msl']:.1f}m")
-                        ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']}, {state['uav_size']});")
-                    elif state['click_mode'] == 'Boundary':
+                    if state['click_mode'] == 'Boundary':
                         state['boundary'].append({'coords': pt, 'action': state['current_action']})
                         update_boundary_display()
                     else:
@@ -483,52 +532,6 @@ async def main_page():
             if "JavaScript did not respond" not in str(e):
                 print(f"Polling Error: {e}")
     
-    def flight_controller():
-        if not state['running'] or not state['route']: return
-            
-        movement_budget = SPEED * state['speed_mult']
-        
-        while movement_budget > 0 and state['route']:
-            if state['target_idx'] >= len(state['route']):
-                state['target_idx'] = len(state['route']) - 1
-                break
-                
-            target = state['route'][state['target_idx']]['coords']
-            dx, dy = target[0] - state['lng'], target[1] - state['lat']
-            dz_deg = (target[2] - state['alt_msl']) / 111111.0 
-            dist = math.sqrt(dx**2 + dy**2 + dz_deg**2)
-            
-            if dist <= movement_budget:
-                state['lng'], state['lat'], state['alt_msl'] = target[0], target[1], target[2]
-                movement_budget -= dist
-                
-                if len(state['route']) > 1:
-                    is_closed_loop = (state['route'][0]['coords'] == state['route'][-1]['coords'])
-                    state['target_idx'] += state['direction']
-                    
-                    if state['target_idx'] >= len(state['route']):
-                        if is_closed_loop:
-                            state['direction'] = 1
-                            state['target_idx'] = 1 
-                        else:
-                            state['direction'] = -1
-                            state['target_idx'] = len(state['route']) - 2 
-                    elif state['target_idx'] < 0:
-                        state['direction'] = 1
-                        state['target_idx'] = 1
-            else:
-                state['lng'] += (dx / dist) * movement_budget
-                state['lat'] += (dy / dist) * movement_budget
-                state['alt_msl'] += (dz_deg / dist) * movement_budget * 111111.0
-                movement_budget = 0
-                
-        update_path_display()
-        lng_label.set_text(f"Lon: {state['lng']:.5f}")
-        lat_label.set_text(f"Lat: {state['lat']:.5f}")
-        alt_msl_label.set_text(f"MSL: {state['alt_msl']:.1f}m")
-        ui.run_javascript(f"window.updateUAV({state['lng']}, {state['lat']}, {state['alt_msl']}, {state['agl_m']}, {state['uav_size']});")
-
     ui.timer(0.1, poll_waypoints)
-    ui.timer(0.1, flight_controller)
 
-ui.run(host='127.0.0.1', port=8091, title="intelligent path planer - IPP")
+ui.run(host='127.0.0.1', port=int(os.environ.get('PORT', 8091)), title="Crop Health Monitor")

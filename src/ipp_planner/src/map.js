@@ -1,5 +1,6 @@
 console.log("[map.js] File loaded successfully! Waiting for clicks...");
 window.waypointQueue = [];
+window.historicalHotspotsVisible = true;
 
 window.initMap = function () {
     if (!document.getElementById('map')) {
@@ -32,7 +33,7 @@ window.initMap = function () {
             'terrain': { 'source': 'terrainSource', 'exaggeration': 1.5 }
         },
         center: [window.MAP_CONFIG.lng, window.MAP_CONFIG.lat],
-        zoom: 14.5, pitch: 65, maxPitch: 85
+        zoom: 15, pitch: 0, maxPitch: 70
     });
 
     window.mapInstance.addControl(new maplibregl.NavigationControl({ visualizePitch: true, showZoom: true, showCompass: true }), 'bottom-right');
@@ -41,6 +42,50 @@ window.initMap = function () {
         window.mapInstance.getCanvas().style.cursor = 'crosshair';
 
         try {
+            const historicalIncidents = [
+                [-0.0013, -0.0007, 0.95], [-0.0010, -0.0004, 0.86],
+                [-0.0008, -0.0008, 0.82], [-0.0005, -0.0005, 0.94],
+                [-0.0002, -0.0007, 0.75], [0.0001, -0.0004, 0.88],
+                [0.0003, -0.0008, 0.72], [0.0006, -0.0005, 0.83],
+                [0.0008, -0.0001, 0.92], [0.0011, 0.0002, 0.78],
+                [0.0005, 0.0001, 0.76], [0.0002, 0.0004, 0.90],
+                [-0.0002, 0.0002, 0.68], [-0.0006, 0.0005, 0.84],
+                [-0.0009, 0.0008, 0.74], [0.0009, 0.0007, 0.65],
+                [0.0013, 0.0005, 0.72], [-0.0013, 0.0002, 0.62]
+            ].map(([offsetLng, offsetLat, intensity]) => ({
+                type: 'Feature',
+                properties: { intensity },
+                geometry: {
+                    type: 'Point',
+                    coordinates: [
+                        window.MAP_CONFIG.lng + offsetLng,
+                        window.MAP_CONFIG.lat + offsetLat
+                    ]
+                }
+            }));
+            window.mapInstance.addSource('historical-incidents', {
+                type: 'geojson',
+                data: { type: 'FeatureCollection', features: historicalIncidents }
+            });
+            window.mapInstance.addLayer({
+                id: 'historical-hotspots',
+                type: 'circle',
+                source: 'historical-incidents',
+                layout: { visibility: window.historicalHotspotsVisible ? 'visible' : 'none' },
+                paint: {
+                    'circle-radius': ['interpolate', ['linear'], ['get', 'intensity'], 0.6, 22, 1, 32],
+                    'circle-color': [
+                        'interpolate', ['linear'], ['get', 'intensity'],
+                        0.6, '#a3e635',
+                        0.75, '#facc15',
+                        0.88, '#fb923c',
+                        1, '#dc2626'
+                    ],
+                    'circle-blur': 0.8,
+                    'circle-opacity': 0.8
+                }
+            });
+
             // --- Boundary Layers ---
             window.mapInstance.addSource('boundary', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
             window.mapInstance.addLayer({ 'id': 'boundary-fill', 'type': 'fill', 'source': 'boundary', 'filter': ['==', '$type', 'Polygon'], 'paint': { 'fill-color': '#facc15', 'fill-opacity': 0.3 } });
@@ -50,26 +95,10 @@ window.initMap = function () {
 
             // --- Path Layers (Ground Track, Points, and Labels) ---
             window.mapInstance.addSource('path', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
-            window.mapInstance.addLayer({ 'id': 'path-line', 'type': 'line', 'source': 'path', 'filter': ['==', '$type', 'LineString'], 'paint': { 'line-color': '#3b82f6', 'line-width': 3 } });
-            window.mapInstance.addLayer({ 'id': 'path-points', 'type': 'circle', 'source': 'path', 'filter': ['==', '$type', 'Point'], 'paint': { 'circle-radius': 6, 'circle-color': '#3b82f6', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' } });
-            window.mapInstance.addLayer({ 'id': 'path-labels', 'type': 'symbol', 'source': 'path', 'filter': ['==', '$type', 'Point'], 'layout': { 'text-field': ['get', 'label'], 'text-size': 12, 'text-anchor': 'left', 'text-offset': [0.8, 0], 'text-allow-overlap': true }, 'paint': { 'text-color': '#000000', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
+            window.mapInstance.addLayer({ 'id': 'path-line', 'type': 'line', 'source': 'path', 'filter': ['==', '$type', 'LineString'], 'paint': { 'line-color': '#0f766e', 'line-width': 4 } });
+            window.mapInstance.addLayer({ 'id': 'path-points', 'type': 'circle', 'source': 'path', 'filter': ['==', '$type', 'Point'], 'paint': { 'circle-radius': 7, 'circle-color': '#0f766e', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' } });
+            window.mapInstance.addLayer({ 'id': 'path-labels', 'type': 'symbol', 'source': 'path', 'filter': ['==', '$type', 'Point'], 'layout': { 'text-field': ['get', 'label'], 'text-size': 12, 'text-anchor': 'left', 'text-offset': [0.8, 0], 'text-allow-overlap': true }, 'paint': { 'text-color': '#064e3b', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
 
-            // --- UAV Shadow & True 3D Marker ---
-            window.mapInstance.addSource('uav-shadow', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
-            window.mapInstance.addLayer({ 'id': 'uav-shadow-layer', 'type': 'fill', 'source': 'uav-shadow', 'paint': { 'fill-color': '#000000', 'fill-opacity': 0.5 } });
-
-            window.mapInstance.addSource('uav-marker', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': [] } });
-            window.mapInstance.addLayer({
-                'id': 'uav-marker-layer',
-                'type': 'fill-extrusion',
-                'source': 'uav-marker',
-                'paint': {
-                    'fill-extrusion-color': '#ef4444',
-                    'fill-extrusion-height': ['get', 'height'],
-                    'fill-extrusion-base': ['get', 'base'],
-                    'fill-extrusion-opacity': 1.0
-                }
-            });
         } catch (e) {
             console.error("MAP LAYER CRASH:", e);
         }
@@ -100,7 +129,14 @@ window.syncServers = function (servers) {
                     ...(server.type === 'raster-dem' ? { 'encoding': 'terrarium', 'maxzoom': 14 } : {})
                 });
                 if (server.type === 'raster') {
-                    window.mapInstance.addLayer({ 'id': layerId, 'type': 'raster', 'source': sourceId, 'layout': { 'visibility': 'visible' } }, 'boundary-fill');
+                    const overlayLayer = window.mapInstance.getLayer('historical-hotspots')
+                        ? 'historical-hotspots'
+                        : window.mapInstance.getLayer('boundary-fill')
+                            ? 'boundary-fill'
+                            : undefined;
+                    const rasterLayer = { 'id': layerId, 'type': 'raster', 'source': sourceId, 'layout': { 'visibility': 'visible' } };
+                    if (overlayLayer) window.mapInstance.addLayer(rasterLayer, overlayLayer);
+                    else window.mapInstance.addLayer(rasterLayer);
                 }
             } else if (server.type === 'raster' && window.mapInstance.getLayer(layerId)) {
                 window.mapInstance.setLayoutProperty(layerId, 'visibility', 'visible');
@@ -112,43 +148,6 @@ window.syncServers = function (servers) {
     });
     if (activeDem) window.mapInstance.setTerrain({ 'source': activeDem, 'exaggeration': 1.5 });
     else window.mapInstance.setTerrain(null);
-};
-
-window.updateUAV = function (lng, lat, alt_msl, agl, uavSize) {
-    if (!agl) agl = 30;
-    if (!uavSize) uavSize = 3.0;
-
-    try {
-        if (window.mapInstance) {
-            const currentZoom = window.mapInstance.getZoom();
-            const metersPerPixel = (156543.03392 * Math.cos(lat * Math.PI / 180)) / Math.pow(2, currentZoom);
-
-            const radiusMeters = (uavSize / 2.0) * metersPerPixel;
-            const radiusDegLat = radiusMeters / 111111.0;
-            const radiusDegLng = radiusMeters / (111111.0 * Math.cos(lat * Math.PI / 180));
-
-            const circleCoords = [];
-            for (let i = 0; i < 32; i++) {
-                const theta = (i / 32) * (2 * Math.PI);
-                circleCoords.push([lng + (radiusDegLng * Math.cos(theta)), lat + (radiusDegLat * Math.sin(theta))]);
-            }
-            circleCoords.push(circleCoords[0]);
-
-            if (window.mapInstance.getSource('uav-shadow')) {
-                window.mapInstance.getSource('uav-shadow').setData({ 'type': 'Feature', 'geometry': { 'type': 'Polygon', 'coordinates': [circleCoords] } });
-            }
-            if (window.mapInstance.getSource('uav-marker')) {
-                const thickness = Math.min(0.5, radiusMeters / 2.0);
-                window.mapInstance.getSource('uav-marker').setData({
-                    'type': 'Feature',
-                    'properties': { 'base': agl - thickness, 'height': agl + thickness },
-                    'geometry': { 'type': 'Polygon', 'coordinates': [circleCoords] }
-                });
-            }
-        }
-    } catch (e) {
-        console.error("UAV UPDATE ERROR:", e);
-    }
 };
 
 window.updatePath = function (geojson) {
@@ -165,4 +164,14 @@ window.updateBoundary = function (geojson) {
     } catch (e) {
         console.error("BOUNDARY UPDATE ERROR:", e, geojson);
     }
+};
+
+window.setHistoricalHotspotsVisible = function (visible) {
+    window.historicalHotspotsVisible = visible;
+    if (!window.mapInstance || !window.mapInstance.getLayer('historical-hotspots')) return;
+    window.mapInstance.setLayoutProperty(
+        'historical-hotspots',
+        'visibility',
+        visible ? 'visible' : 'none'
+    );
 };
