@@ -104,6 +104,26 @@ async def main_page():
             with ui.button(icon='delete_sweep', on_click=lambda: clear_all()).props('outline').classes('text-gray-600'):
                 ui.tooltip('Clear field and route')
         wp_label = ui.label('Route points: 0').classes('text-xs font-semibold text-emerald-800 mt-3')
+        ui.separator().classes('my-3')
+        with ui.row().classes('w-full items-center justify-between'):
+            with ui.row().classes('items-center gap-2'):
+                ui.icon('sensors').classes('text-sky-700')
+                ui.label('Device tracking').classes('text-sm font-bold text-gray-900')
+            tracking_status_badge = ui.badge('Ready', color='grey').props('rounded')
+        ui.label('Route-following simulation · no live device data').classes('text-[11px] text-gray-500')
+        tracking_position_label = ui.label('Position: —').classes('text-xs font-mono text-gray-700 mt-1')
+        tracking_progress_label = ui.label('Progress: 0%').classes('text-xs text-gray-500')
+        with ui.row().classes('w-full gap-2 mt-2'):
+            start_tracking_button = ui.button(
+                'Start',
+                icon='play_arrow',
+                on_click=lambda: start_tracking(),
+            ).props('disable').classes('bg-sky-700 text-white flex-1')
+            stop_tracking_button = ui.button(
+                'Stop',
+                icon='stop',
+                on_click=lambda: stop_tracking(),
+            ).props('outline disable').classes('text-gray-600 flex-1')
 
     # ==========================================
     # POPUP DIALOGS (Settings, Upload, Export)
@@ -318,11 +338,71 @@ The hotspots and figures shown are sample data for demonstration only.
     # ==========================================
     # FLIGHT & ELEVATION LOGIC
     # ==========================================
+    is_tracking = False
+    tracking_index = 0
+
+    def update_tracking_display(status, badge_color, progress):
+        tracking_status_badge.set_text(status)
+        tracking_status_badge.props(f'color={badge_color}')
+        tracking_progress_label.set_text(f'Progress: {progress}%')
+        start_tracking_button.set_enabled(bool(state['route']) and not is_tracking)
+        stop_tracking_button.set_enabled(is_tracking)
+
+    def stop_tracking():
+        nonlocal is_tracking
+        is_tracking = False
+        tracking_timer.deactivate()
+        progress = int(tracking_index / max(len(state['route']) - 1, 1) * 100) if state['route'] else 0
+        status = 'Complete' if state['route'] and tracking_index >= len(state['route']) - 1 else 'Stopped'
+        update_tracking_display(status, 'green' if status == 'Complete' else 'grey', progress)
+
+    def start_tracking():
+        nonlocal is_tracking, tracking_index
+        if len(state['route']) < 2:
+            ui.notify('Generate a route with at least two points before starting tracking.', type='warning')
+            return
+        tracking_index = 0
+        is_tracking = True
+        start = state['route'][tracking_index]['coords']
+        tracking_position_label.set_text(f'Position: {start[1]:.5f}, {start[0]:.5f}')
+        ui.run_javascript(f'window.updateSimulatedDevice({json.dumps(start[:2])});')
+        update_tracking_display('Simulating', 'blue', 0)
+        tracking_timer.activate()
+
+    def update_tracking():
+        nonlocal tracking_index
+        if not is_tracking or not state['route']:
+            return
+        tracking_index = min(
+            tracking_index + max(1, math.ceil((len(state['route']) - 1) / 120)),
+            len(state['route']) - 1,
+        )
+        coords = state['route'][tracking_index]['coords']
+        tracking_position_label.set_text(f'Position: {coords[1]:.5f}, {coords[0]:.5f}')
+        ui.run_javascript(f'window.updateSimulatedDevice({json.dumps(coords[:2])});')
+        progress = int(tracking_index / (len(state['route']) - 1) * 100)
+        if tracking_index >= len(state['route']) - 1:
+            stop_tracking()
+        else:
+            update_tracking_display('Simulating', 'blue', progress)
+
+    tracking_timer = ui.timer(0.25, update_tracking, active=False)
+
     def clear_all():
+        nonlocal tracking_index
+        if is_tracking:
+            stop_tracking()
         state['route'].clear()
         state['boundary'].clear()
+        tracking_index = 0
+        tracking_position_label.set_text('Position: —')
+        tracking_status_badge.set_text('Ready')
+        tracking_status_badge.props('color=grey')
+        tracking_progress_label.set_text('Progress: 0%')
+        start_tracking_button.disable()
         update_path_display()
         update_boundary_display()
+        ui.run_javascript('window.clearSimulatedDevice();')
 
     def get_elevation(lng, lat, open_rasters=None):
         if open_rasters is not None:
@@ -355,6 +435,7 @@ The hotspots and figures shown are sample data for demonstration only.
                 state['route'][-1]['coords'] = p1.copy()
 
     def generate_coverage_path(show_warning=True):
+        nonlocal tracking_index
         if len(state['boundary']) < 3:
             if show_warning:
                 ui.notify('Mark at least three points to draw the field boundary.', type='warning')
@@ -458,9 +539,17 @@ The hotspots and figures shown are sample data for demonstration only.
         
         for src, _ in open_rasters: src.close()
             
+        if is_tracking:
+            stop_tracking()
         state['route'] = new_route_3d
+        tracking_index = 0
+        tracking_position_label.set_text('Position: —')
+        tracking_status_badge.set_text('Ready')
+        tracking_status_badge.props('color=grey')
+        tracking_progress_label.set_text('Progress: 0%')
         check_and_close_route() 
         update_path_display()
+        ui.run_javascript('window.clearSimulatedDevice();')
 
     def update_boundary_display():
         features = []
@@ -477,6 +566,7 @@ The hotspots and figures shown are sample data for demonstration only.
 
     def update_path_display():
         wp_label.set_text(f"Route points: {len(state['route'])}")
+        start_tracking_button.set_enabled(len(state['route']) >= 2 and not is_tracking)
         features = []
         if state['route']:
             start = state['route'][0]['coords']
@@ -518,6 +608,9 @@ The hotspots and figures shown are sample data for demonstration only.
                         state['boundary'].append({'coords': pt, 'action': state['current_action']})
                         update_boundary_display()
                     else:
+                        if is_tracking:
+                            stop_tracking()
+                            ui.run_javascript('window.clearSimulatedDevice();')
                         pt_3d = [pt[0], pt[1], get_elevation(pt[0], pt[1]) + state['agl_m']]
                         state['route'].append({'coords': pt_3d, 'action': state['current_action']})
                         check_and_close_route() 

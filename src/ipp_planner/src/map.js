@@ -99,6 +99,33 @@ window.initMap = function () {
             window.mapInstance.addLayer({ 'id': 'path-points', 'type': 'circle', 'source': 'path', 'filter': ['==', '$type', 'Point'], 'paint': { 'circle-radius': 7, 'circle-color': '#0f766e', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' } });
             window.mapInstance.addLayer({ 'id': 'path-labels', 'type': 'symbol', 'source': 'path', 'filter': ['==', '$type', 'Point'], 'layout': { 'text-field': ['get', 'label'], 'text-size': 12, 'text-anchor': 'left', 'text-offset': [0.8, 0], 'text-allow-overlap': true }, 'paint': { 'text-color': '#064e3b', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
 
+            window.mapInstance.addSource('simulated-device', {
+                type: 'geojson',
+                data: { type: 'FeatureCollection', features: [] }
+            });
+            window.mapInstance.addLayer({
+                id: 'simulated-device-halo',
+                type: 'circle',
+                source: 'simulated-device',
+                paint: {
+                    'circle-radius': 16,
+                    'circle-color': '#38bdf8',
+                    'circle-opacity': 0.35,
+                    'circle-blur': 0.2
+                }
+            });
+            window.mapInstance.addLayer({
+                id: 'simulated-device-marker',
+                type: 'circle',
+                source: 'simulated-device',
+                paint: {
+                    'circle-radius': 7,
+                    'circle-color': '#0284c7',
+                    'circle-stroke-width': 3,
+                    'circle-stroke-color': '#ffffff'
+                }
+            });
+
         } catch (e) {
             console.error("MAP LAYER CRASH:", e);
         }
@@ -156,6 +183,24 @@ window.updatePath = function (geojson) {
     } catch (e) {
         console.error("PATH UPDATE ERROR:", e, geojson);
     }
+};
+
+window.updateSimulatedDevice = function (coordinates) {
+    const source = window.mapInstance && window.mapInstance.getSource('simulated-device');
+    if (!source || !Array.isArray(coordinates) || coordinates.length < 2) return;
+    source.setData({
+        type: 'FeatureCollection',
+        features: [{
+            type: 'Feature',
+            properties: {},
+            geometry: { type: 'Point', coordinates }
+        }]
+    });
+};
+
+window.clearSimulatedDevice = function () {
+    const source = window.mapInstance && window.mapInstance.getSource('simulated-device');
+    if (source) source.setData({ type: 'FeatureCollection', features: [] });
 };
 
 window.updateBoundary = function (geojson) {

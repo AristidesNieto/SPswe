@@ -11,6 +11,7 @@ The web app is built with Python, NiceGUI, and MapLibre GL JS. It runs on port `
 * Users can mark a field boundary, add points, and generate an intervention route using parallel passes or a grid pattern.
 * Areas and routes can be exported as GeoJSON, KML, or KMZ.
 * The dashboard shows a visual device panel with example connection states; adding devices and connecting to hardware are not implemented.
+* After creating a route, users can start a route-following device simulation with a moving map marker and simulated position/progress readouts. It does not use live device telemetry.
 
 The dashboard indicators are also sample data. The next phase should replace them with farm, season, and pathogen data defined for the project.
 
